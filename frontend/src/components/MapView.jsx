@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { ResolutionBadgeCompact } from './ResolutionBadge';
 import { MapContainer, TileLayer, Tooltip, useMap, useMapEvents, Marker, Popup, Polyline, Circle } from 'react-leaflet';
 import L from 'leaflet';
@@ -268,7 +268,26 @@ function WaterwayBufferLayer({ waterways, waterwayThreshold, waterwayBuffer, act
   );
 }
  
-function fitMapToEarthquake(map, eq, { isMobile = false, fitPadding = [60, 60] } = {}) {
+const DEFAULT_ROUTE_FIT_PADDING = [60, 60];
+
+function getLatLngBoundsFromLatLngs(latLngs) {
+  return latLngs.reduce(
+    (b, [lat, lon]) => [
+      [Math.min(b[0][0], lat), Math.min(b[0][1], lon)],
+      [Math.max(b[1][0], lat), Math.max(b[1][1], lon)],
+    ],
+    [[Infinity, Infinity], [-Infinity, -Infinity]]
+  );
+}
+
+function hasActiveRoute(evacuationRoute, navigateSaferRoute, navigateFasterRoute) {
+  return [evacuationRoute, navigateSaferRoute, navigateFasterRoute].some((g) => {
+    const coords = g?.coordinates ?? g?.geometry?.coordinates ?? [];
+    return coords.length >= 2;
+  });
+}
+
+function fitMapToEarthquake(map, eq, { isMobile = false, fitPadding = DEFAULT_ROUTE_FIT_PADDING } = {}) {
   const latLng = getEarthquakeLatLng(eq);
   if (!latLng) return;
 
@@ -297,28 +316,24 @@ function MapController({
   selectedEarthquake,
   mapVisible = true,
   isMobile = false,
-  earthquakeFitPadding = [60, 60],
+  earthquakeFitPadding = DEFAULT_ROUTE_FIT_PADDING,
+  disableZoneAutoZoom = false,
 }) {
   const map = useMap();
-  
-  useEffect(() => {
-    if (selectedZone && selectedZone.geometry) {
-      const coords = invertCoords(selectedZone.geometry);
-      if (coords.length > 0) {
-        // Compute bounding box and fit bounds
-        const bounds = coords.reduce((acc, curr) => {
-          return [
-            [Math.min(acc[0][0], curr[0]), Math.min(acc[0][1], curr[1])],
-            [Math.max(acc[1][0], curr[0]), Math.max(acc[1][1], curr[1])]
-          ];
-        }, [[Infinity, Infinity], [-Infinity, -Infinity]]);
-        
-        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14, animate: true, duration: 1.2 });
-      }
-      return undefined;
-    }
+  const selectedZoneId = selectedZone?.id ?? selectedZone?.zone_id ?? null;
 
-    if (!selectedEarthquake || !mapVisible) return undefined;
+  useEffect(() => {
+    if (disableZoneAutoZoom || !selectedZoneId || !selectedZone?.geometry) return;
+
+    const coords = invertCoords(selectedZone.geometry);
+    if (coords.length === 0) return;
+
+    const bounds = getLatLngBoundsFromLatLngs(coords);
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14, animate: true, duration: 1.2 });
+  }, [selectedZoneId, disableZoneAutoZoom, map]);
+
+  useEffect(() => {
+    if (selectedZoneId || !selectedEarthquake || !mapVisible) return undefined;
 
     const fit = () => fitMapToEarthquake(map, selectedEarthquake, { isMobile, fitPadding: earthquakeFitPadding });
 
@@ -328,8 +343,8 @@ function MapController({
     // Re-fit after Leaflet remeasures the container (mobile tab switch / flex layout settle)
     const timers = [50, 300, 700].map((ms) => setTimeout(fit, ms));
     return () => timers.forEach(clearTimeout);
-  }, [selectedZone, selectedEarthquake, mapVisible, isMobile, earthquakeFitPadding, map]);
- 
+  }, [selectedZoneId, selectedEarthquake, mapVisible, isMobile, earthquakeFitPadding, map]);
+
   return null;
 }
 
@@ -430,33 +445,33 @@ function MapSizeInvalidator({ selectedEarthquake = null, isMobile = false }) {
  * whenever evacuationRoute changes. Works like a navigation app: as soon as
  * a route is calculated, the map adjusts to show the full path.
  */
-function RouteController({ evacuationRoute, navigateSaferRoute, navigateFasterRoute, fitPadding = [60, 60] }) {
+function RouteController({
+  evacuationRoute,
+  navigateSaferRoute,
+  navigateFasterRoute,
+  fitPadding = DEFAULT_ROUTE_FIT_PADDING,
+}) {
   const map = useMap();
+  const fitPaddingRef = useRef(fitPadding);
+  fitPaddingRef.current = fitPadding;
 
   useEffect(() => {
     const collections = [evacuationRoute, navigateSaferRoute, navigateFasterRoute]
       .map((g) => g?.coordinates ?? g?.geometry?.coordinates ?? [])
       .filter((coords) => coords.length >= 2);
     if (collections.length === 0) return;
-    const coords = collections.flat();
 
-    // Convert GeoJSON [lon, lat] to Leaflet [lat, lon] bounds
+    const coords = collections.flat();
     const latLngs = coords.map(([lon, lat]) => [lat, lon]);
-    const bounds = latLngs.reduce(
-      (b, [lat, lon]) => [
-        [Math.min(b[0][0], lat), Math.min(b[0][1], lon)],
-        [Math.max(b[1][0], lat), Math.max(b[1][1], lon)],
-      ],
-      [[Infinity, Infinity], [-Infinity, -Infinity]]
-    );
+    const bounds = getLatLngBoundsFromLatLngs(latLngs);
 
     map.fitBounds(bounds, {
-      padding: fitPadding,
+      padding: fitPaddingRef.current,
       maxZoom: 15,
       animate: true,
       duration: 1.0,
     });
-  }, [evacuationRoute, navigateSaferRoute, navigateFasterRoute, map, fitPadding]);
+  }, [evacuationRoute, navigateSaferRoute, navigateFasterRoute, map]);
 
   return null;
 }
@@ -486,11 +501,15 @@ export default function MapView({
   isMobile = false,
   mapVisible = true,
   layerPreset = null,
-  routeFitPadding = [60, 60],
+  routeFitPadding = DEFAULT_ROUTE_FIT_PADDING,
 }) {
   const isLight = theme === 'light';
   const [globalPois, setGlobalPois] = useState([]);
   const hasActiveDisruptions = predictions.length > 0;
+  const activeRoutePresent = useMemo(
+    () => hasActiveRoute(evacuationRoute, navigateSaferRoute, navigateFasterRoute),
+    [evacuationRoute, navigateSaferRoute, navigateFasterRoute]
+  );
   const [waterways, setWaterways] = useState([]);
   const [allZones, setAllZones] = useState([]);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
@@ -1651,6 +1670,7 @@ export default function MapView({
           mapVisible={mapVisible}
           isMobile={isMobile}
           earthquakeFitPadding={routeFitPadding}
+          disableZoneAutoZoom={activeRoutePresent}
         />
         <UserLocationController
           userLocation={userLocation}

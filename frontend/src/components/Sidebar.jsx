@@ -758,6 +758,7 @@ export default function Sidebar({
                 selected={selectedPrediction?.id === pred.id}
                 onClick={() => onSelectPrediction(pred)}
                 showSafeRoute={Boolean(onGetEvacuation)}
+                safeRouteVariant={onGetEvacuation ? 'link' : 'hidden'}
                 onSafeRoute={() => onGetEvacuation?.()}
               />
             ))

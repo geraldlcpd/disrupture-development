@@ -60,6 +60,7 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    allowedHosts: ['gk-m1mini.tail68c554.ts.net', '.tail68c554.ts.net', 'localhost'],
     https: httpsConfig,
   },
 });

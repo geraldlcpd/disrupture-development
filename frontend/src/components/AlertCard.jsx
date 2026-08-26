@@ -41,6 +41,7 @@ export default function AlertCard({
   onClick,
   onSafeRoute,
   showSafeRoute = false,
+  safeRouteVariant = 'hidden',
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const isLight = theme === 'light';
@@ -48,6 +49,15 @@ export default function AlertCard({
 
   const zoneName = prediction.zone?.name ?? 'Unknown area';
   const risk = prediction.risk_level || prediction.severity || 'Medium';
+
+  const routeVariant = safeRouteVariant !== 'hidden'
+    ? safeRouteVariant
+    : showSafeRoute
+      ? 'primary'
+      : 'hidden';
+
+  const showPrimaryRoute = routeVariant === 'primary' && onSafeRoute;
+  const showLinkRoute = routeVariant === 'link' && onSafeRoute && showDetails;
 
   return (
     <div
@@ -96,7 +106,7 @@ export default function AlertCard({
         >
           {showDetails ? 'Hide details' : 'More details'}
         </button>
-        {showSafeRoute && onSafeRoute && (
+        {showPrimaryRoute && (
           <button
             type="button"
             onClick={(e) => {
@@ -124,6 +134,18 @@ export default function AlertCard({
           )}
           {prediction.id && <MlResolutionBadgeCompact alertId={prediction.id} theme={theme} />}
           <MlRiskBadgeCompact zoneId={prediction.zone?.zone_id ?? prediction.zone?.id} theme={theme} />
+          {showLinkRoute && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSafeRoute(prediction);
+              }}
+              className={`text-[11px] font-semibold ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`}
+            >
+              Get safe route →
+            </button>
+          )}
         </div>
       )}
     </div>

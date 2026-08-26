@@ -16,6 +16,7 @@ import EmergencyHelpModal from './components/EmergencyHelpModal';
 import AlertCard from './components/AlertCard';
 import BmkgEarthquakeList from './components/BmkgEarthquakeList';
 import AreaSearchInput from './components/AreaSearchInput';
+import LocationOffChip from './components/LocationOffChip';
 import NavigatePanel, { NavigateRouteBar } from './components/NavigatePanel';
 import PersonaPicker from './components/PersonaPicker';
 import PersonaApplyConfirmModal from './components/PersonaApplyConfirmModal';
@@ -38,6 +39,7 @@ import {
 } from './utils/pushNotifications';
 import { saveUserLocation } from './utils/idbLocation';
 import { saveNotificationPreferences } from './utils/idbPreferences';
+import { getGeolocationErrorMessage } from './utils/geolocationMessage';
 
 const MapView = lazy(() => import('./components/MapView'));
 
@@ -152,6 +154,7 @@ export default function App() {
   const [mobileTab, setMobileTab] = useState('map'); // 'map', 'navigate', 'feed', 'settings'
   const [nearestToastPlayKey, setNearestToastPlayKey] = useState(0);
   const [nearestToastConsumed, setNearestToastConsumed] = useState(false);
+  const [nearestToastReady, setNearestToastReady] = useState(false);
   const [mapHeight, setMapHeight] = useState(0);
   const [mapWidth, setMapWidth] = useState(0);
   const [mapKey, setMapKey] = useState('mobile-0');
@@ -304,6 +307,11 @@ export default function App() {
     [predictions]
   );
 
+  const routeFitPadding = useMemo(
+    () => (showEvacuation ? [72, 220] : [60, 60]),
+    [showEvacuation]
+  );
+
   const handleNavigateRoutesReady = (payload) => {
     setNavigateRoutes(payload);
     setSelectedNavigateRoute(payload.safer ? 'safer' : 'faster');
@@ -376,8 +384,9 @@ export default function App() {
         setShowLocationPrompt(false);
       },
       (err) => {
-        setLocationError(err.message);
+        setLocationError(getGeolocationErrorMessage(err));
         setLocating(false);
+        setShowAreaSearch(true);
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -411,6 +420,64 @@ export default function App() {
   const [dbLatency, setDbLatency] = useState(0);
   const [realDbEmpty, setRealDbEmpty] = useState(true);
   const [allowFallbackBypass, setAllowFallbackBypass] = useState(false);
+
+  const mapUiReady = !showStackSplash && personaResolved && persona && (!showFirstRunTour || skippedToMap);
+
+  const mapOverlay = useMemo(() => {
+    const onMapTab = isMobile && mobileTab === 'map';
+    const showLargeLocationPrompt = onMapTab && mapUiReady
+      && !userLocation && !locating && (!locationPromptSkipped || showLocationPrompt);
+    const showLocationOffChip = onMapTab && mapUiReady
+      && !userLocation && !locating && locationPromptSkipped && !showLocationPrompt;
+    const showNearMeStatusChip = onMapTab && mobileMapStatus && !showLargeLocationPrompt;
+    const showOjekHintNow = onMapTab && showOjekGoHint && persona === 'ojek'
+      && userLocation && !showLargeLocationPrompt;
+    const showMapBottomEvacuationCta = onMapTab
+      && filteredPredictions.length > 0 && !showEvacuation;
+    const showLocateFab = onMapTab && !showMapBottomEvacuationCta;
+
+    return {
+      showLargeLocationPrompt,
+      showLocationOffChip,
+      showNearMeStatusChip,
+      showOjekHintNow,
+      showMapBottomEvacuationCta,
+      showLocateFab,
+    };
+  }, [
+    isMobile,
+    mobileTab,
+    mapUiReady,
+    userLocation,
+    locating,
+    locationPromptSkipped,
+    showLocationPrompt,
+    mobileMapStatus,
+    showOjekGoHint,
+    persona,
+    filteredPredictions.length,
+    showEvacuation,
+  ]);
+
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    if (tab === 'feed' || tab === 'alerts') setMobileTab('feed');
+    else if (tab === 'settings') setMobileTab('settings');
+    else if (tab === 'navigate' || tab === 'go') setMobileTab('navigate');
+  }, []);
+
+  useEffect(() => {
+    if (!userLocation || !mapUiReady) {
+      setNearestToastReady(false);
+      return undefined;
+    }
+    if (isMobile && mapOverlay.showLargeLocationPrompt) {
+      setNearestToastReady(false);
+      return undefined;
+    }
+    const timer = setTimeout(() => setNearestToastReady(true), 2500);
+    return () => clearTimeout(timer);
+  }, [userLocation, mapUiReady, isMobile, mapOverlay.showLargeLocationPrompt]);
 
   useEffect(() => {
     const timer = setTimeout(() => setMinSplashElapsed(true), 700);
@@ -1297,14 +1364,14 @@ export default function App() {
 
   return (
     <div className={`flex flex-col h-screen h-[100dvh] w-screen overflow-hidden font-sans ${theme === 'light' ? 'light-mode' : 'bg-brand-dark text-slate-100'}`}>
-      {!showStackSplash && userLocation && (!showFirstRunTour || skippedToMap) && (
+      {!showStackSplash && userLocation && mapUiReady && nearestToastReady && (
         <NearestAlertToast
           items={nearestAlertToasts}
           theme={theme}
           playKey={nearestToastPlayKey}
-          active={!nearestToastConsumed}
+          active={!nearestToastConsumed && !mapOverlay.showLargeLocationPrompt}
           visible={!isMobile || mobileTab === 'map'}
-          offsetBelowChip={isMobile && !!mobileMapStatus}
+          offsetBelowChip={isMobile && mapOverlay.showNearMeStatusChip}
           onSelect={(prediction) => handleSelectZone(prediction, { expanded: false })}
           onFinished={() => setNearestToastConsumed(true)}
         />
@@ -1476,13 +1543,30 @@ export default function App() {
                 <Locate className={`w-3.5 h-3.5 ${locating ? 'animate-spin' : ''}`} />
                 <span className="hidden sm:inline">{locating ? 'Locating…' : 'My Location'}</span>
               </button>
-              {locationError && (
-                <span className="text-xs text-red-400 hidden md:inline">{locationError}</span>
-              )}
             </>
           )}
         </div>
       </header>
+      {!isMobile && locationError && (
+        <div
+          className={`shrink-0 px-6 py-3 border-b space-y-2 ${
+            theme === 'light'
+              ? 'border-slate-200 bg-slate-50 text-slate-800'
+              : 'border-slate-800 bg-slate-900/80 text-slate-100'
+          }`}
+        >
+          <p className={`text-xs ${theme === 'light' ? 'text-amber-800' : 'text-amber-400'}`}>
+            {locationError}
+          </p>
+          <AreaSearchInput
+            allZones={allZones}
+            value={areaSearchQuery}
+            onChange={saveAreaSearch}
+            onZoneSelected={handleAreaZoneSelected}
+            theme={theme}
+          />
+        </div>
+      )}
       {/* Notification Preferences Modal */}
       {showNotificationPreferences && (
         <div
@@ -1534,7 +1618,7 @@ export default function App() {
           {/* Active View Selector */}
           {mobileTab === 'map' && (
             <div className="relative flex flex-col w-full" style={{ height: mapHeight }}>
-              {mobileMapStatus && (
+              {mapOverlay.showNearMeStatusChip && (
                 <div className="absolute top-3 left-3 right-16 z-[1200] pointer-events-none">
                   <div className={`mobile-map-status inline-flex max-w-full rounded-xl px-3 py-2 border backdrop-blur-md shadow-lg ${
                     mobileMapStatus.tone === 'clear'
@@ -1559,7 +1643,7 @@ export default function App() {
                 </div>
               )}
 
-              {showOjekGoHint && persona === 'ojek' && (
+              {mapOverlay.showOjekHintNow && (
                 <div className="absolute top-[4.5rem] left-3 right-3 z-[1195] pointer-events-auto">
                   <div className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs shadow-lg ${
                     theme === 'light'
@@ -1578,7 +1662,21 @@ export default function App() {
                 </div>
               )}
 
-              {!userLocation && !locating && (!locationPromptSkipped || showLocationPrompt) && (
+              {mapOverlay.showLocationOffChip && (
+                <div className="absolute top-3 left-3 right-16 z-[1200] pointer-events-auto">
+                  <LocationOffChip
+                    theme={theme}
+                    locating={locating}
+                    onUseLocation={locateUser}
+                    onSearchArea={() => {
+                      setShowLocationPrompt(true);
+                      setShowAreaSearch(true);
+                    }}
+                  />
+                </div>
+              )}
+
+              {mapOverlay.showLargeLocationPrompt && (
                 <div className="absolute top-36 left-3 right-3 z-[1050] pointer-events-auto">
                   <div className={`rounded-xl border p-3 space-y-2 shadow-lg ${
                     theme === 'light'
@@ -1636,22 +1734,22 @@ export default function App() {
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={handleMyLocationClick}
-                disabled={locating}
-                className="absolute right-3 z-[1160] flex items-center gap-1.5 px-3 py-2.5 rounded-full bg-indigo-600 text-white text-xs font-bold shadow-lg disabled:bg-indigo-600/50 disabled:cursor-not-allowed"
-                style={{
-                  bottom: showEvacuation
-                    ? '44vh'
-                    : filteredPredictions.length > 0
-                      ? MOBILE_LOCATE_ABOVE_CTA
+              {mapOverlay.showLocateFab && (
+                <button
+                  type="button"
+                  onClick={handleMyLocationClick}
+                  disabled={locating}
+                  className="absolute right-3 z-[1160] flex items-center gap-1.5 px-3 py-2.5 rounded-full bg-indigo-600 text-white text-xs font-bold shadow-lg disabled:bg-indigo-600/50 disabled:cursor-not-allowed"
+                  style={{
+                    bottom: showEvacuation
+                      ? '44vh'
                       : MOBILE_NAV_BOTTOM,
-                }}
-              >
-                <Locate className={`w-4 h-4 ${locating ? 'animate-spin' : ''}`} />
-                {locating ? 'Locating…' : 'My location'}
-              </button>
+                  }}
+                >
+                  <Locate className={`w-4 h-4 ${locating ? 'animate-spin' : ''}`} />
+                  {locating ? 'Locating…' : 'My location'}
+                </button>
+              )}
 
               {/* Interactive Leaflet Map — explicit pixel height prevents Leaflet offset bug */}
               <div data-tour="map-container" style={{ width: mapWidth || '100%', height: mapHeight || '100%', touchAction: 'none', WebkitUserSelect: 'none', userSelect: 'none', flexShrink: 0 }}>
@@ -1682,7 +1780,7 @@ export default function App() {
                     isMobile={isMobile}
                     mapVisible={mobileTab === 'map'}
                     layerPreset={mapLayerPreset}
-                    routeFitPadding={showEvacuation ? [72, 220] : [60, 60]}
+                    routeFitPadding={routeFitPadding}
                   />
                 </MapViewGate>
               </div>
@@ -1713,7 +1811,7 @@ export default function App() {
               />
 
               {/* Evacuation guidance trigger */}
-              {filteredPredictions.length > 0 && !showEvacuation && (
+              {mapOverlay.showMapBottomEvacuationCta && (
                 <div
                   className="absolute left-0 right-0 z-[1150] px-3 py-2 pointer-events-none"
                   style={{ bottom: MOBILE_NAV_BOTTOM }}
@@ -1914,7 +2012,7 @@ export default function App() {
                         handleSelectZone(pred, { expanded: false });
                         setMobileTab('map');
                       }}
-                      showSafeRoute
+                      safeRouteVariant="link"
                       onSafeRoute={() => {
                         openEvacuationPanel(pred);
                         setMobileTab('map');
@@ -2225,6 +2323,7 @@ export default function App() {
                   suppressMapControls={showNotificationPreferences}
                   isMobile={false}
                   layerPreset={mapLayerPreset}
+                  routeFitPadding={routeFitPadding}
                 />
               </MapViewGate>
             </div>

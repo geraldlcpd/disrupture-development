@@ -21,7 +21,12 @@ import argparse
 import psycopg2
 import psycopg2.extras
 
+from dotenv import load_dotenv
+
 sys.path.insert(0, os.path.dirname(__file__))
+# Load worker/.env if present
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 from push_sender import _matches_preferences  # reuse real preference logic
 
 
@@ -51,19 +56,38 @@ def main():
         print("❌ VAPID_PRIVATE_KEY not set")
         sys.exit(1)
 
+    import ssl
+    import urllib3
+    import requests
+    
+    # Disable SSL verification warnings and force requests to bypass SSL verification
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    ssl._create_default_https_context = ssl._create_unverified_context
+    os.environ["PYTHONHTTPSVERIFY"] = "0"
+    
+    # Monkey patch requests Session to force verify=False in pywebpush
+    orig_request = requests.Session.request
+    def unverified_request(self, *args, **kwargs):
+        kwargs["verify"] = False
+        return orig_request(self, *args, **kwargs)
+    requests.Session.request = unverified_request
+
     try:
         from pywebpush import webpush, WebPushException
     except ImportError:
         print("❌ Run: pip install pywebpush --break-system-packages")
         sys.exit(1)
 
-    conn = psycopg2.connect(db_url, sslmode="require", cursor_factory=psycopg2.extras.RealDictCursor)
+    # Disable SSL cert verification for PostgreSQL (allow self-signed certs)
+    ssl_mode = "prefer" if "localhost" in db_url or "127.0.0.1" in db_url else "require"
+    conn = psycopg2.connect(db_url, sslmode=ssl_mode, cursor_factory=psycopg2.extras.RealDictCursor)
     cur = conn.cursor()
     cur.execute("""
-        SELECT endpoint, p256dh, auth, preferences
+        SELECT id, endpoint, p256dh, auth, preferences
         FROM push_subscriptions
         WHERE p256dh IS NOT NULL AND p256dh != ''
           AND auth IS NOT NULL AND auth != ''
+        ORDER BY id ASC
     """)
     subs = cur.fetchall()
     cur.close()
@@ -118,6 +142,8 @@ def main():
     sent, skipped, failed = 0, 0, 0
 
     for sub in subs:
+        sub_id = sub.get("id", "?")
+        endpoint = sub.get("endpoint", "")
         prefs = {}
         try:
             raw = sub.get("preferences")
@@ -126,14 +152,14 @@ def main():
             prefs = {}
 
         if not _matches_preferences(test_alert, prefs):
-            print(f"⏭️  Skipped (preferences don't match): {sub['endpoint'][:50]}...")
+            print(f"⏭️  [ID {sub_id}] Skipped (preferences don't match):\n   {endpoint}\n")
             skipped += 1
             continue
 
         try:
             webpush(
                 subscription_info={
-                    "endpoint": sub["endpoint"],
+                    "endpoint": endpoint,
                     "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
                 },
                 data=json.dumps(payload),
@@ -141,17 +167,18 @@ def main():
                 vapid_claims={"sub": vapid_subject},
                 ttl=300,
             )
-            print(f"✅ Sent: {sub['endpoint'][:50]}...")
+            print(f"✅ [ID {sub_id}] Sent:\n   {endpoint}\n")
             sent += 1
         except WebPushException as e:
             status = getattr(e.response, "status_code", "?") if hasattr(e, "response") else "?"
             body = getattr(e.response, "text", "") if hasattr(e, "response") else ""
-            print(f"❌ Failed ({status}): {sub['endpoint'][:50]}...")
+            print(f"❌ [ID {sub_id}] Failed ({status}):\n   {endpoint}")
             if body:
-                print(f"   {body[:200]}")
+                print(f"   Response: {body.strip()}")
+            print()
             failed += 1
         except Exception as e:
-            print(f"❌ Error: {sub['endpoint'][:50]}... — {e}")
+            print(f"❌ [ID {sub_id}] Error:\n   {endpoint}\n   Details: {e}\n")
             failed += 1
 
     print(f"\n--- Summary ---")

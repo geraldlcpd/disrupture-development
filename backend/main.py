@@ -1235,3 +1235,136 @@ async def get_sla_metrics(
         "risk_alerts_generated": alert_count,
         "data_freshness_ok": traffic_count > 0 or weather_count > 0,
     }
+
+
+# ── /dashboard/summary — Dashboard analytics & metrics ────────────────────────
+@app.get("/dashboard/summary")
+async def get_dashboard_summary(
+    days: int = Query(default=7, ge=1, le=30),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns aggregated metrics, daily trends, disruption breakdowns, and zone
+    rankings for the main Dashboard view.
+    """
+    days = min(days, 30)
+
+    # 1. Total alerts breakdown
+    res = await db.execute(
+        text("""
+            SELECT COUNT(*) as total,
+                   COUNT(*) FILTER (WHERE status='OPEN') as open_count,
+                   COUNT(*) FILTER (WHERE status='CLOSED') as closed_count,
+                   COUNT(*) FILTER (WHERE severity='HIGH') as high_count,
+                   COUNT(*) FILTER (WHERE severity='MEDIUM') as medium_count
+            FROM risk_alerts
+            WHERE alert_timestamp >= NOW() - (INTERVAL '1 day' * :days)
+        """),
+        {"days": days}
+    )
+    totals_row = res.mappings().fetchone() or {}
+    totals = {
+        "total": totals_row.get("total", 0),
+        "open": totals_row.get("open_count", 0),
+        "closed": totals_row.get("closed_count", 0),
+        "high": totals_row.get("high_count", 0),
+        "medium": totals_row.get("medium_count", 0),
+    }
+
+    # 2. Dominant disruption type
+    res = await db.execute(
+        text("""
+            SELECT disruption_type, COUNT(*) as cnt
+            FROM risk_alerts
+            WHERE alert_timestamp >= NOW() - (INTERVAL '1 day' * :days)
+            GROUP BY disruption_type
+            ORDER BY cnt DESC
+            LIMIT 1
+        """),
+        {"days": days}
+    )
+    top_type_row = res.mappings().fetchone()
+    dominant_type = top_type_row["disruption_type"] if top_type_row else "N/A"
+
+    # 3. Daily trend
+    res = await db.execute(
+        text("""
+            SELECT DATE(alert_timestamp AT TIME ZONE 'Asia/Jakarta') as day,
+                   COUNT(*) as count
+            FROM risk_alerts
+            WHERE alert_timestamp >= NOW() - (INTERVAL '1 day' * :days)
+            GROUP BY day
+            ORDER BY day ASC
+        """),
+        {"days": days}
+    )
+    daily_trend = [
+        {"day": str(r["day"]), "count": r["count"]}
+        for r in res.mappings().fetchall()
+    ]
+
+    # 4. Severity breakdown by type
+    res = await db.execute(
+        text("""
+            SELECT disruption_type,
+                   COUNT(*) FILTER (WHERE severity='HIGH') as high,
+                   COUNT(*) FILTER (WHERE severity='MEDIUM') as medium
+            FROM risk_alerts
+            WHERE alert_timestamp >= NOW() - (INTERVAL '1 day' * :days)
+            GROUP BY disruption_type
+            ORDER BY (COUNT(*) FILTER (WHERE severity='HIGH') + COUNT(*) FILTER (WHERE severity='MEDIUM')) DESC
+        """),
+        {"days": days}
+    )
+    breakdown = [
+        {
+            "type": r["disruption_type"].capitalize() if r["disruption_type"] else "Unknown",
+            "HIGH": r["high"] or 0,
+            "MEDIUM": r["medium"] or 0,
+        }
+        for r in res.mappings().fetchall()
+        if (r["high"] or 0) + (r["medium"] or 0) > 0
+    ]
+
+    # 5. Zone rankings
+    res = await db.execute(
+        text("""
+            SELECT ra.zone_id, z.name,
+                   COUNT(*) as total_alerts,
+                   COUNT(*) FILTER (WHERE ra.status='OPEN') as open_alerts,
+                   COUNT(*) FILTER (WHERE ra.severity='HIGH') as high_alerts,
+                   MAX(zs.overall_risk_score) as risk_score
+            FROM risk_alerts ra
+            LEFT JOIN zones z ON ra.zone_id = z.zone_id
+            LEFT JOIN zone_status zs ON ra.zone_id = zs.zone_id
+            WHERE ra.alert_timestamp >= NOW() - (INTERVAL '1 day' * :days)
+            GROUP BY ra.zone_id, z.name
+            ORDER BY total_alerts DESC
+            LIMIT 20
+        """),
+        {"days": days}
+    )
+    zone_rankings = [
+        {
+            "zone_id": r["zone_id"],
+            "name": r["name"] or f"Zone {r['zone_id']}",
+            "total_alerts": r["total_alerts"],
+            "open_alerts": r["open_alerts"] or 0,
+            "high_alerts": r["high_alerts"] or 0,
+            "risk_score": float(r["risk_score"] or 0),
+        }
+        for r in res.mappings().fetchall()
+    ]
+
+    hotspot = zone_rankings[0] if zone_rankings else None
+
+    return {
+        "days": days,
+        "totals": totals,
+        "dominant_type": dominant_type,
+        "hotspot": hotspot,
+        "daily_trend": daily_trend,
+        "severity_breakdown": breakdown,
+        "zone_rankings": zone_rankings,
+    }
+

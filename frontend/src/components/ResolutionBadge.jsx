@@ -82,11 +82,18 @@ export function ResolutionBadgeCompact({ estimated_resolution_at, resolution_con
     <div className={`flex items-center gap-1.5 text-xs font-medium ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
       <span>🕐</span>
       <span>
-        <span>Clears around</span>{' '}
-        <span className={`font-bold ${text}`}>
-          {uncertain ? 'uncertain' : time}
-        </span>
-        {remainingLabel && <span className={`ml-1 ${mutedText}`}>· {remainingLabel}</span>}
+        {uncertain ? (
+          <>
+            <span className={`font-bold ${text}`}>Clear time not confirmed yet</span>
+            {remainingLabel && <span className={`ml-1 ${mutedText}`}>· {remainingLabel}</span>}
+          </>
+        ) : (
+          <>
+            <span>Clears around</span>{' '}
+            <span className={`font-bold ${text}`}>{time}</span>
+            {remainingLabel && <span className={`ml-1 ${mutedText}`}>· {remainingLabel}</span>}
+          </>
+        )}
       </span>
     </div>
   );
@@ -123,7 +130,7 @@ export function ResolutionBadgeExpanded({ estimated_resolution_at, resolution_co
             Estimated Resolution
           </p>
           <p className={`font-bold text-sm ${text}`}>
-            {conf < 60 ? 'Estimate uncertain' : time}
+            {conf < 60 ? 'Clear time not confirmed yet' : time}
           </p>
           {remainingLabel && (
             <p className={`mt-1 text-[11px] font-medium ${isLight ? 'text-slate-700' : 'text-slate-200'}`}>
