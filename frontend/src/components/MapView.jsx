@@ -12,6 +12,8 @@ import {
   getEarthquakeLatLng,
 } from '../utils/formatEarthquake';
 
+const CARTO_KEY = import.meta.env.VITE_CARTO_API_KEY || '';
+
 // Which disruption types each POI category can serve as shelter for.
 // Mirrors _DISRUPTION_SAFE_TIERS in backend/main.py — keep in sync if tiers change.
 const POI_DISRUPTION_SUITABILITY = {
@@ -1021,9 +1023,9 @@ export default function MapView({
       >
         {/* Tiles */}
         <TileLayer
-          url={theme === 'dark' 
-            ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-            : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          url={theme === 'dark'
+            ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${CARTO_KEY}`
+            : `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=${CARTO_KEY}`
           }
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
         />
