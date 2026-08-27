@@ -6,6 +6,9 @@ import { calculateDistanceKm } from './haversine';
 
 export const NAVIGATE_SEARCH_RADIUS_KM = 100;
 export const NAVIGATE_SEARCH_LIMIT = 10;
+export const TOMTOM_SEARCH_MIN_INTERVAL_MS = 1000;
+
+let lastTomtomSearchCallAt = 0;
 
 const MAJOR_SECTION_TYPES = new Set([
   'motorway',
@@ -108,6 +111,30 @@ export async function fetchTomtomRoute({
   return parsed;
 }
 
+function delay(ms, signal) {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function waitForTomtomSearchSlot(signal) {
+  const waitMs = Math.max(0, lastTomtomSearchCallAt + TOMTOM_SEARCH_MIN_INTERVAL_MS - Date.now());
+  await delay(waitMs, signal);
+  lastTomtomSearchCallAt = Date.now();
+}
+
 export async function searchTomtomPlaces({
   apiKey,
   query,
@@ -115,7 +142,11 @@ export async function searchTomtomPlaces({
   lon,
   radiusKm,
   limit = NAVIGATE_SEARCH_LIMIT,
-}) {
+}, { signal } = {}) {
+  await waitForTomtomSearchSlot(signal);
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
   const params = new URLSearchParams({
     key: apiKey,
     typeahead: 'true',

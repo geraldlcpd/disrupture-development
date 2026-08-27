@@ -1,8 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigation, Search, Locate, Loader2, MapPin } from 'lucide-react';
 import CrowdMeter from './CrowdMeter';
 import { resolveCrowdScore } from '../utils/crowdLookup';
 import { getApiUrl } from '../utils/getApiUrl';
+import { calculateDistanceKm } from '../utils/haversine';
+import { addRecentDestination, getRecentDestinations } from '../utils/navigateRecentDestinations';
 import {
   circleToBbox,
   fetchTomtomRoute,
@@ -12,6 +14,35 @@ import {
 } from '../utils/tomtomRoute';
 
 const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY || '';
+const SEARCH_DEBOUNCE_MS = 500;
+
+function PlaceListItem({ place, isLight, routing, onPick }) {
+  return (
+    <li>
+      <button
+        type="button"
+        disabled={routing}
+        onClick={() => onPick(place)}
+        className={`w-full text-left rounded-xl border p-3 ${
+          isLight ? 'border-slate-200 bg-white hover:bg-slate-50' : 'border-slate-800 bg-slate-900/50 hover:bg-slate-800/60'
+        }`}
+      >
+        <p className="text-sm font-semibold flex items-center gap-2">
+          <MapPin className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          <span className="truncate">{place.name}</span>
+          {Number.isFinite(place.distanceKm) && (
+            <span className={`ml-auto shrink-0 text-[11px] font-normal ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+              {place.distanceKm} km
+            </span>
+          )}
+        </p>
+        {place.address && (
+          <p className={`mt-1 text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{place.address}</p>
+        )}
+      </button>
+    </li>
+  );
+}
 
 export default function NavigatePanel({
   userLocation,
@@ -30,7 +61,23 @@ export default function NavigatePanel({
   const [routing, setRouting] = useState(false);
   const [error, setError] = useState('');
   const [searchedWithNoResults, setSearchedWithNoResults] = useState(false);
+  const [recentDestinations, setRecentDestinations] = useState(() => getRecentDestinations());
   const searchRequestId = useRef(0);
+
+  const trimmedQuery = query.trim();
+  const showRecents = trimmedQuery.length === 0 && userLocation && recentDestinations.length > 0;
+
+  const recentWithDistance = useMemo(() => {
+    if (!userLocation || recentDestinations.length === 0) return [];
+    return recentDestinations
+      .map((place) => ({
+        ...place,
+        distanceKm: Number(
+          calculateDistanceKm(userLocation.lat, userLocation.lon, place.lat, place.lon).toFixed(1)
+        ),
+      }))
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
+  }, [recentDestinations, userLocation?.lat, userLocation?.lon]);
 
   useEffect(() => {
     fetch(`${getApiUrl()}/pois`)
@@ -56,7 +103,8 @@ export default function NavigatePanel({
       return undefined;
     }
 
-    const timer = setTimeout(async () => {
+    const abortController = new AbortController();
+    const debounceTimer = setTimeout(async () => {
       const requestId = ++searchRequestId.current;
       setSearching(true);
       setError('');
@@ -68,7 +116,7 @@ export default function NavigatePanel({
           lat: userLocation.lat,
           lon: userLocation.lon,
           radiusKm: NAVIGATE_SEARCH_RADIUS_KM,
-        });
+        }, { signal: abortController.signal });
         if (requestId !== searchRequestId.current) return;
 
         const reachable = await filterCarReachablePlaces({
@@ -84,6 +132,7 @@ export default function NavigatePanel({
         setResults(sorted);
         setSearchedWithNoResults(sorted.length === 0);
       } catch (err) {
+        if (err?.name === 'AbortError') return;
         if (requestId !== searchRequestId.current) return;
         setError(err.message || 'Search failed.');
         setResults([]);
@@ -93,8 +142,12 @@ export default function NavigatePanel({
           setSearching(false);
         }
       }
-    }, 300);
-    return () => clearTimeout(timer);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      abortController.abort();
+      clearTimeout(debounceTimer);
+    };
   }, [query, userLocation?.lat, userLocation?.lon]);
 
   const pickPlace = async (place) => {
@@ -144,6 +197,8 @@ export default function NavigatePanel({
     }
 
     setRouting(false);
+    const updatedRecents = addRecentDestination(place);
+    setRecentDestinations(updatedRecents);
     const crowd = resolveCrowdScore({
       lat: place.lat,
       lon: place.lon,
@@ -214,12 +269,6 @@ export default function NavigatePanel({
         />
       </div>
 
-      {userLocation && (
-        <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-          Showing places within {NAVIGATE_SEARCH_RADIUS_KM} km by car
-        </p>
-      )}
-
       {searching && (
         <p className="text-xs text-slate-400 flex items-center gap-2">
           <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching…
@@ -238,33 +287,38 @@ export default function NavigatePanel({
         </p>
       )}
 
-      <ul className="space-y-2">
-        {results.map((place) => (
-          <li key={place.id}>
-            <button
-              type="button"
-              disabled={routing}
-              onClick={() => pickPlace(place)}
-              className={`w-full text-left rounded-xl border p-3 ${
-                isLight ? 'border-slate-200 bg-white hover:bg-slate-50' : 'border-slate-800 bg-slate-900/50 hover:bg-slate-800/60'
-              }`}
-            >
-              <p className="text-sm font-semibold flex items-center gap-2">
-                <MapPin className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span className="truncate">{place.name}</span>
-                {Number.isFinite(place.distanceKm) && (
-                  <span className={`ml-auto shrink-0 text-[11px] font-normal ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-                    {place.distanceKm} km
-                  </span>
-                )}
-              </p>
-              {place.address && (
-                <p className={`mt-1 text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{place.address}</p>
-              )}
-            </button>
-          </li>
-        ))}
-      </ul>
+      {showRecents && (
+        <div className="space-y-2">
+          <p className={`text-xs font-semibold ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+            Recent Destinations
+          </p>
+          <ul className="space-y-2">
+            {recentWithDistance.map((place) => (
+              <PlaceListItem
+                key={place.id}
+                place={place}
+                isLight={isLight}
+                routing={routing}
+                onPick={pickPlace}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {trimmedQuery.length >= 2 && (
+        <ul className="space-y-2">
+          {results.map((place) => (
+            <PlaceListItem
+              key={place.id}
+              place={place}
+              isLight={isLight}
+              routing={routing}
+              onPick={pickPlace}
+            />
+          ))}
+        </ul>
+      )}
 
       <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
         We will show a safer route that tries to skip disruption zones, and a faster route that may go through them.
