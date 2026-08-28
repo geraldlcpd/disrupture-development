@@ -173,6 +173,42 @@ const createSafeZoneIcon = (type) => {
     popupAnchor: [0, -24]
   });
 };
+const createStartPinIcon = () => L.divIcon({
+  html: `
+    <div class="flex items-center justify-center
+                w-7 h-7 rounded-full
+                bg-emerald-500
+                border-[3px] border-white
+                shadow-[0_2px_8px_rgba(0,0,0,0.35)]
+                text-white text-xs font-extrabold
+                ring-2 ring-emerald-500/40">
+      A
+    </div>
+  `,
+  className: "route-pin-marker",
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+  popupAnchor: [0, -16]
+});
+
+const createDestinationPinIcon = () => L.divIcon({
+  html: `
+    <div class="flex items-center justify-center
+                w-7 h-7 rounded-full
+                bg-red-500
+                border-[3px] border-white
+                shadow-[0_2px_8px_rgba(0,0,0,0.35)]
+                text-white text-xs font-extrabold
+                ring-2 ring-red-500/40">
+      B
+    </div>
+  `,
+  className: "route-pin-marker",
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+  popupAnchor: [0, -16]
+});
+
 // Helper to determine styling of Jakarta's waterways based on alert and category
 const getWaterwayStyle = (category, alertLevel) => {
   let color = '#2563eb'; // Default Normal Safe Blue
@@ -498,6 +534,7 @@ export default function MapView({
   evacuationRoute = null,
   navigateSaferRoute = null,
   navigateFasterRoute = null,
+  routeDestination = null,
   selectedNavigateRoute = 'safer',
   suppressMapControls = false,
   isMobile = false,
@@ -512,6 +549,33 @@ export default function MapView({
     () => hasActiveRoute(evacuationRoute, navigateSaferRoute, navigateFasterRoute),
     [evacuationRoute, navigateSaferRoute, navigateFasterRoute]
   );
+
+  // Destination pin position: prefer the named destination passed from App
+  // (Navigate selection or evacuation panel). Fall back to the end point of
+  // whichever route polyline is currently drawn.
+  const routePinDestination = useMemo(() => {
+    if (!activeRoutePresent) return null;
+    if (Number.isFinite(routeDestination?.lat) && Number.isFinite(routeDestination?.lon)) {
+      return {
+        lat: routeDestination.lat,
+        lon: routeDestination.lon,
+        name: routeDestination.name || 'Destination',
+        address: routeDestination.address || '',
+      };
+    }
+    let coords = null;
+    if (evacuationRoute?.geometry?.coordinates?.length >= 2) {
+      coords = evacuationRoute.geometry.coordinates[evacuationRoute.geometry.coordinates.length - 1];
+    } else {
+      const primary = selectedNavigateRoute === 'faster'
+        ? (navigateFasterRoute ?? navigateSaferRoute)
+        : (navigateSaferRoute ?? navigateFasterRoute);
+      const arr = primary?.coordinates ?? primary?.geometry?.coordinates ?? [];
+      if (arr.length >= 2) coords = arr[arr.length - 1];
+    }
+    if (!coords) return null;
+    return { lat: coords[1], lon: coords[0], name: 'Destination', address: '' };
+  }, [activeRoutePresent, routeDestination, evacuationRoute, navigateSaferRoute, navigateFasterRoute, selectedNavigateRoute]);
   const [waterways, setWaterways] = useState([]);
   const [allZones, setAllZones] = useState([]);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
@@ -1104,7 +1168,47 @@ export default function MapView({
             </Circle>
           </>
         )}
-        
+
+        {/* Route start pin (A) — shown only while a route is active */}
+        {activeRoutePresent && userLocation && (
+          <Marker
+            position={[userLocation.lat, userLocation.lon]}
+            icon={createStartPinIcon()}
+            zIndexOffset={500}
+          >
+            <Tooltip direction="top" offset={[0, -14]}>
+              <div className="font-sans p-1 text-slate-100 font-semibold text-xs">
+                Start — Your Location
+              </div>
+            </Tooltip>
+          </Marker>
+        )}
+
+        {/* Route destination pin (B) — one marker shared by safer/faster routes */}
+        {activeRoutePresent && routePinDestination && (
+          <Marker
+            position={[routePinDestination.lat, routePinDestination.lon]}
+            icon={createDestinationPinIcon()}
+            zIndexOffset={500}
+          >
+            <Popup>
+              <div className="font-sans p-2 text-slate-900 dark:text-slate-100 min-w-[190px] select-none">
+                <div className="font-bold text-sm mb-1 text-slate-800 dark:text-slate-200">
+                  {routePinDestination.name}
+                </div>
+                {routePinDestination.address && (
+                  <div className="text-xs text-slate-500 mb-1.5">{routePinDestination.address}</div>
+                )}
+                {Number.isFinite(routeDestination?.distanceKm) && (
+                  <div className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 border-t border-slate-200 dark:border-slate-800 pt-1.5">
+                    ~{routeDestination.distanceKm} km to destination
+                  </div>
+                )}
+              </div>
+            </Popup>
+          </Marker>
+        )}
+
         {/* Render geofenced zones */}
         {predictions.length > 0 && (() => {
           // Deduplicate by zone_id + disruption_type — keeps the highest probability entry.

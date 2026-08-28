@@ -145,6 +145,7 @@ export default function App() {
 
   const handleRouteReady = (geoJSON, destination) => {
     setEvacuationRoute(geoJSON);
+    setEvacuationDestination(destination ?? null);
   };
   const [selectedPrediction, setSelectedPrediction] = useState(null);
   const [bottomSheetExpanded, setBottomSheetExpanded] = useState(true);
@@ -189,6 +190,7 @@ export default function App() {
   const [nearMeFilterActive, setNearMeFilterActive] = useState(false);
   const [showEvacuation, setShowEvacuation] = useState(false);
   const [evacuationRoute, setEvacuationRoute] = useState(null); // GeoJSON LineString
+  const [evacuationDestination, setEvacuationDestination] = useState(null); // { lat, lon, name, ... }
   const [navigateRoutes, setNavigateRoutes] = useState(null); // { destination, safer, faster, saferError }
   const [selectedNavigateRoute, setSelectedNavigateRoute] = useState('safer');
   const [showDesktopNavigate, setShowDesktopNavigate] = useState(false);
@@ -1204,6 +1206,7 @@ export default function App() {
   const closeEvacuationPanel = () => {
     setShowEvacuation(false);
     setEvacuationRoute(null);
+    setEvacuationDestination(null);
     setEvacuationTargetPrediction(null);
     if (activeAutoEvacuationKey) {
       setDismissedAutoEvacuationKeys(prev => new Set(prev).add(activeAutoEvacuationKey));
@@ -1773,6 +1776,7 @@ export default function App() {
                     nearMeRadius={nearMeRadius}
                     setNearMeRadius={handleNearMeRadiusChange}
                     evacuationRoute={evacuationRoute}
+                    routeDestination={navigateRoutes?.destination ?? evacuationDestination}
                     navigateSaferRoute={navigateRoutes?.safer?.geometry}
                     navigateFasterRoute={navigateRoutes?.faster?.geometry}
                     selectedNavigateRoute={selectedNavigateRoute}
@@ -2317,6 +2321,7 @@ export default function App() {
                   nearMeRadius={nearMeRadius}
                   setNearMeRadius={handleNearMeRadiusChange}
                   evacuationRoute={evacuationRoute}
+                  routeDestination={navigateRoutes?.destination ?? evacuationDestination}
                   navigateSaferRoute={navigateRoutes?.safer?.geometry}
                   navigateFasterRoute={navigateRoutes?.faster?.geometry}
                   selectedNavigateRoute={selectedNavigateRoute}

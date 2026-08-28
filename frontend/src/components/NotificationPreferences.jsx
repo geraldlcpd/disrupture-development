@@ -206,9 +206,7 @@ export default function NotificationPreferences({
                 : (previewPayload?.message || 'DIS-RUPTURE - [SEVERITY] Alert [disruption type] at [area name]. Score ([risk score]/100).')}
             </p>
             <p className={`mt-2 text-xs ${previewMetaClasses}`}>
-              {previewPayload?.safe_area
-                ? `This preview shows the same format used by push notifications. The severity, disruption type, area name, and risk score will change based on the detected alert. Recommended safe area: ${previewPayload.safe_area}.`
-                : 'Follow official emergency guidance and avoid the affected zone.'}
+              Follow official emergency guidance and avoid the affected zone.
             </p>
           </div>
 

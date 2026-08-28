@@ -15,11 +15,16 @@ DISRUPTION_TYPE_MAP = {
     "weather": "weather", "earthquake": "earthquake",
 }
 
-SEVERITY_EMOJI = {"HIGH": "🚨", "MEDIUM": "⚠️", "LOW": "ℹ️", "CRITICAL": "🆘"}
-DISRUPTION_EMOJI = {
-    "traffic": "🚗", "crowd": "👥", "weather": "⛈️",
-    "waterway": "🌊", "earthquake": "🌍",
+DISRUPTION_LABELS = {
+    "traffic": "Traffic",
+    "weather": "Weather",
+    "flood": "Flood / River",
+    "waterway": "Flood / River",
+    "crowd": "Crowd",
+    "earthquake": "Earthquake",
 }
+
+SEVERITY_DEFAULT_SCORE = {"CRITICAL": 90, "HIGH": 75, "MEDIUM": 50, "LOW": 25}
 
 def _coerce_number(val):
     try: return float(val)
@@ -38,37 +43,26 @@ def find_safe_area(alert, safe_areas):
     if not safe_areas: return None
     return min(safe_areas, key=lambda s: _coerce_number(s.get("distance_km")) or 999, default=None)
 
+def _format_disruption_label(disruption_type):
+    dtype = _normalize_type(disruption_type)
+    return DISRUPTION_LABELS.get(dtype, dtype.replace("_", " ").title())
+
+def _resolve_risk_score(alert):
+    score = _coerce_number(alert.get("probability_percentage") or alert.get("score"))
+    if score is not None:
+        return int(round(score))
+    severity = str(alert.get("severity") or "MEDIUM").upper()
+    return SEVERITY_DEFAULT_SCORE.get(severity, 50)
+
 def build_message(alert, safe_area):
-    dtype = _normalize_type(alert.get("disruption_type"))
-    sev = str(alert.get("severity") or "MEDIUM").upper()
+    severity = str(alert.get("severity") or "MEDIUM").upper()
+    disruption_label = _format_disruption_label(alert.get("disruption_type"))
     zone = alert.get("zone_name") or "the affected area"
-    emoji = DISRUPTION_EMOJI.get(dtype, "⚠️")
-    sev_emoji = SEVERITY_EMOJI.get(sev, "⚠️")
-
-    parts = [f"{sev_emoji} {sev} {dtype.capitalize()} disruption at {zone}."]
-
-    dist = _coerce_number(alert.get("distance_km"))
-    if dist is not None:
-        parts.append(f"Distance: {dist:.1f} km from you.")
-
-    if dtype == "traffic":
-        spd = _coerce_number(alert.get("current_speed"))
-        if spd: parts.append(f"Current speed: {spd:.0f} km/h.")
-    elif dtype == "waterway":
-        lvl = _coerce_number(alert.get("water_level_cm"))
-        river = alert.get("river_name")
-        if lvl and river: parts.append(f"{river} at {lvl:.0f}cm ({alert.get('alert_level','')}).")
-    elif dtype == "earthquake":
-        mag = _coerce_number(alert.get("magnitude"))
-        if mag: parts.append(f"Magnitude M{mag:.1f}.")
-    elif dtype == "weather":
-        rain = _coerce_number(alert.get("rainfall_intensity_mm"))
-        if rain: parts.append(f"Rainfall: {rain:.0f}mm/hr.")
-
-    if safe_area:
-        parts.append(f"Nearest safe area: {safe_area.get('name')} ({safe_area.get('distance_km', '?')} km).")
-
-    return " ".join(parts)
+    risk_score = _resolve_risk_score(alert)
+    return (
+        f"DIS-RUPTURE - {severity} Alert {disruption_label} at {zone}. "
+        f"Score ({risk_score}/100)."
+    )
 
 class handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass
@@ -100,6 +94,7 @@ class handler(BaseHTTPRequestHandler):
             alert_id = alert.get("alert_id")
             zone_id = alert.get("zone_id")
             zone_name = alert.get("zone_name") or "the affected area"
+            probability_percentage = _resolve_risk_score(alert)
 
             payload = {
                 "alert_id": alert_id,
@@ -107,6 +102,7 @@ class handler(BaseHTTPRequestHandler):
                 "severity": severity,
                 "zone_name": zone_name,
                 "distance_km": _coerce_number(alert.get("distance_km")),
+                "probability_percentage": probability_percentage,
                 "message": message,
                 "safe_area": safe_area,
                 "map_link": (
