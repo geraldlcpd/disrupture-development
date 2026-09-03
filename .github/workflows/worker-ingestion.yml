@@ -38,6 +38,7 @@ jobs:
           VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT=${{ secrets.VAPID_SUBJECT }}
           CRON_SECRET=
+          ML_SCORING_ENABLED=false
           EOF
 
       - name: Run ingestion cycle

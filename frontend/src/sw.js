@@ -2,7 +2,7 @@
  * DIS-RUPTURE Service Worker
  * Combines:
  *   1. Workbox precaching (injected by vite-plugin-pwa at build time)
- *   2. Runtime caching strategies (map tiles, API, fonts)
+ *   2. Runtime caching strategies (API, fonts, external assets)
  *   3. Push notification handlers (alert notifications from backend)
  */
 
@@ -17,21 +17,9 @@ precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
 // ── 2. Runtime Caching ────────────────────────────────────────────
-
-// Map tiles — Cache First, 7 days
-// CARTO tiles rarely change; serve from cache for fast map rendering
-registerRoute(
-  ({ url }) => url.hostname.endsWith('.basemaps.cartocdn.com'),
-  new CacheFirst({
-    cacheName: 'map-tiles',
-    plugins: [
-      new ExpirationPlugin({
-        maxEntries: 200,
-        maxAgeSeconds: 7 * 24 * 60 * 60, // 7 days
-      }),
-    ],
-  })
-);
+// CARTO map tiles are NOT intercepted here — Leaflet loads them as <img>
+// subresources. SW CacheFirst on cross-origin tiles causes net::ERR_FAILED
+// (opaque response / request-mode mismatch). Browser HTTP cache handles tiles.
 
 // Vercel API endpoints — Network First, 8s timeout, 5min cache
 // Always try live data first; fall back to cached alerts if offline

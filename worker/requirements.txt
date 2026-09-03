@@ -7,3 +7,7 @@ requests==2.31.0
 fastapi==0.111.0         # HTTP-triggered worker app (app.py), called by GitHub Actions cron
 uvicorn[standard]==0.29.0
 pywebpush==2.0.0         # Web Push Protocol for push notifications
+scikit-learn==1.5.0      # ML batch scoring (ml_scoring.py)
+pandas==2.2.2
+numpy==1.26.4
+joblib==1.4.2

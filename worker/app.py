@@ -112,6 +112,26 @@ def run_scoring(x_cron_secret: str | None = Header(default=None)):
     return _run("scoring_cycle", _worker.run_scoring_cycle, x_cron_secret)
 
 
+@app.post("/run/ml-scoring")
+def run_ml_scoring(x_cron_secret: str | None = Header(default=None)):
+    """ML-only batch scoring — skips ingestion; useful for manual cache refresh."""
+    _check_secret(x_cron_secret)
+    if _worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized yet")
+    from worker.database import get_db_session
+    from worker.ml_scoring import run_ml_batch_scoring
+
+    db = get_db_session()
+    try:
+        summary = run_ml_batch_scoring(db)
+        return {"status": "ok", "job": "ml_scoring", **summary}
+    except Exception as e:
+        logger.exception("[ml_scoring] failed")
+        raise HTTPException(status_code=500, detail=f"ml_scoring failed: {e}") from e
+    finally:
+        db.close()
+
+
 @app.post("/run/all")
 def run_all(x_cron_secret: str | None = Header(default=None)):
     """Convenience: runs the full sweep in one call (used for manual testing)."""

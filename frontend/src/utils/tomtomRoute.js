@@ -2,7 +2,7 @@
  * Shared TomTom helpers used by evacuation and Navigate.
  */
 
-import { calculateDistanceKm } from './haversine';
+import { calculateDistanceKm } from './haversine.js';
 
 export const NAVIGATE_SEARCH_RADIUS_KM = 100;
 export const NAVIGATE_SEARCH_LIMIT = 10;
@@ -36,6 +36,19 @@ export function circleToBbox(lat, lon, radiusM) {
   };
 }
 
+export function extractManeuvers(route) {
+  return (route?.guidance?.instructions ?? []).map((ins, i) => ({
+    index: i,
+    maneuver: ins.maneuver ?? ins.instructionType ?? '',
+    street: ins.street ?? '',
+    roadNumbers: ins.roadNumbers ?? [],
+    text: ins.combinedMessage ?? ins.message ?? '',
+    offsetM: ins.routeOffsetInMeters ?? 0,
+    pointIndex: ins.pointIndex ?? 0,
+    exitNumber: ins.exitNumber ?? null,
+  }));
+}
+
 export function parseTomtomRoute(data) {
   const route = data.routes?.[0];
   if (!route) return null;
@@ -44,12 +57,17 @@ export function parseTomtomRoute(data) {
     (leg.points ?? []).map((p) => [p.longitude, p.latitude])
   );
   const viaRoads = extractMajorViaRoads(route);
+  const travelTimeSec = summary.travelTimeInSeconds ?? 0;
+  const lengthMeters = summary.lengthInMeters ?? 0;
   return {
-    durationMin: Math.ceil((summary.travelTimeInSeconds ?? 0) / 60),
-    distanceKm: Number(((summary.lengthInMeters ?? 0) / 1000).toFixed(1)),
+    durationMin: Math.ceil(travelTimeSec / 60),
+    distanceKm: Number((lengthMeters / 1000).toFixed(1)),
+    travelTimeSec,
+    lengthMeters,
     geometry: { type: 'LineString', coordinates },
     viaRoads,
     viaLabel: formatViaLabel(viaRoads),
+    maneuvers: extractManeuvers(route),
   };
 }
 

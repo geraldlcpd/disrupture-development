@@ -3,7 +3,7 @@ import { getApiUrl } from '../utils/getApiUrl';
 
 const API_URL = getApiUrl();
 
-export function usePredictions() {
+export function usePredictions({ intervalMs = 30000 } = {}) {
   const [predictions, setPredictions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -51,9 +51,9 @@ export function usePredictions() {
 
   useEffect(() => {
     fetchActivePredictions();
-    const intervalId = setInterval(fetchActivePredictions, 30000);
+    const intervalId = setInterval(fetchActivePredictions, intervalMs);
     return () => clearInterval(intervalId);
-  }, [fetchActivePredictions]);
+  }, [fetchActivePredictions, intervalMs]);
 
   return { predictions, loading, error, isFallback, refresh: fetchActivePredictions };
 }

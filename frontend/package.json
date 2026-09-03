@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
+    "test": "node --test src/utils/routeGeometry.test.js src/utils/nearbyDisruptionAlongRoute.test.js src/utils/tomtomRoute.parse.test.js src/utils/liveLocation.test.js src/utils/gpsSimulator.test.js src/utils/navigationSession.test.js src/utils/navigationCamera.test.js src/utils/navUi.test.js",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },

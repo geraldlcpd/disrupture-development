@@ -29,7 +29,7 @@ from worker.models import (
     CrowdSnapshot, EarthquakeEvent, PoiMaster,
     JabodetabekWaterway, WaterwayTelemetry, WaterwayConnectivity,
 )
-from worker.config import TRAFFIC_PROVIDER, GOOGLE_MAPS_API_KEY
+from worker.config import TRAFFIC_PROVIDER, GOOGLE_MAPS_API_KEY, ML_SCORING_ENABLED
 from worker.clients.tomtom import TomTomTrafficClient
 from worker.clients.google import GoogleTrafficClient
 from worker.clients.openmeteo import OpenMeteoClient
@@ -469,9 +469,17 @@ class IngestionWorker:
         logger.info("[Analytics] Scoring cycle starting...")
         db = get_db_session()
         try:
-            self.engine.run_analysis(db)
-        except Exception as e:
-            logger.error(f"[Analytics] Scoring error: {e}")
+            try:
+                self.engine.run_analysis(db)
+            except Exception as e:
+                logger.error(f"[Analytics] Scoring error: {e}")
+
+            if ML_SCORING_ENABLED:
+                try:
+                    from worker.ml_scoring import run_ml_batch_scoring
+                    run_ml_batch_scoring(db)
+                except Exception as e:
+                    logger.error(f"[ML] Batch scoring error: {e}")
         finally:
             db.close()
 

@@ -6,6 +6,8 @@ import 'leaflet/dist/leaflet.css';
 import { Layers, ChevronDown, ChevronUp } from 'lucide-react';
 import { getApiUrl } from '../utils/getApiUrl';
 import { calculateDistanceKm } from '../utils/haversine';
+import { buildRouteIndex, splitRouteAtDistance } from '../utils/routeGeometry.js';
+import { lookAheadCenter, shouldApplyCameraUpdate, zoomForSpeed } from '../utils/navigationCamera.js';
 import {
   formatEarthquakeWhen,
   getEarthquakeImpactRadiusMeters,
@@ -209,6 +211,20 @@ const createDestinationPinIcon = () => L.divIcon({
   popupAnchor: [0, -16]
 });
 
+function createNavigationPuckIcon(headingDeg = 0) {
+  const rot = Number.isFinite(headingDeg) ? headingDeg : 0;
+  return L.divIcon({
+    html: `<div class="nav-puck" style="transform:rotate(${rot}deg)">
+      <svg width="28" height="40" viewBox="0 0 28 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M14 2 L26 36 L14 28 L2 36 Z" fill="#2563eb" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
+      </svg>
+    </div>`,
+    className: 'nav-puck-marker',
+    iconSize: [28, 40],
+    iconAnchor: [14, 20],
+  });
+}
+
 // Helper to determine styling of Jakarta's waterways based on alert and category
 const getWaterwayStyle = (category, alertLevel) => {
   let color = '#2563eb'; // Default Normal Safe Blue
@@ -356,32 +372,32 @@ function MapController({
   isMobile = false,
   earthquakeFitPadding = DEFAULT_ROUTE_FIT_PADDING,
   disableZoneAutoZoom = false,
+  navigationActive = false,
 }) {
   const map = useMap();
   const selectedZoneId = selectedZone?.id ?? selectedZone?.zone_id ?? null;
 
   useEffect(() => {
-    if (disableZoneAutoZoom || !selectedZoneId || !selectedZone?.geometry) return;
+    if (navigationActive || disableZoneAutoZoom || !selectedZoneId || !selectedZone?.geometry) return;
 
     const coords = invertCoords(selectedZone.geometry);
     if (coords.length === 0) return;
 
     const bounds = getLatLngBoundsFromLatLngs(coords);
     map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14, animate: true, duration: 1.2 });
-  }, [selectedZoneId, disableZoneAutoZoom, map]);
+  }, [selectedZoneId, disableZoneAutoZoom, navigationActive, map]);
 
   useEffect(() => {
-    if (selectedZoneId || !selectedEarthquake || !mapVisible) return undefined;
+    if (navigationActive || selectedZoneId || !selectedEarthquake || !mapVisible) return undefined;
 
     const fit = () => fitMapToEarthquake(map, selectedEarthquake, { isMobile, fitPadding: earthquakeFitPadding });
 
     fit();
     map.invalidateSize({ pan: false });
 
-    // Re-fit after Leaflet remeasures the container (mobile tab switch / flex layout settle)
     const timers = [50, 300, 700].map((ms) => setTimeout(fit, ms));
     return () => timers.forEach(clearTimeout);
-  }, [selectedZoneId, selectedEarthquake, mapVisible, isMobile, earthquakeFitPadding, map]);
+  }, [selectedZoneId, selectedEarthquake, mapVisible, isMobile, earthquakeFitPadding, navigationActive, map]);
 
   return null;
 }
@@ -435,7 +451,7 @@ function MapClickListener({ onClearSelectedEarthquake }) {
  * real size, then call invalidateSize() to force Leaflet to remeasure.
  * Also call on multiple delays as a safety net.
  */
-function MapSizeInvalidator({ selectedEarthquake = null, isMobile = false }) {
+function MapSizeInvalidator({ selectedEarthquake = null, isMobile = false, navigationActive = false }) {
   const map = useMap();
 
   useEffect(() => {
@@ -450,7 +466,7 @@ function MapSizeInvalidator({ selectedEarthquake = null, isMobile = false }) {
         `| map.getSize(): ${size.x}x${size.y}`
       );
       map.invalidateSize({ pan: false });
-      if (selectedEarthquake) {
+      if (selectedEarthquake && !navigationActive) {
         fitMapToEarthquake(map, selectedEarthquake, { isMobile });
       }
     };
@@ -473,7 +489,7 @@ function MapSizeInvalidator({ selectedEarthquake = null, isMobile = false }) {
       timers.forEach(clearTimeout);
       if (ro) ro.disconnect();
     };
-  }, [map, selectedEarthquake, isMobile]);
+  }, [map, selectedEarthquake, isMobile, navigationActive]);
 
   return null;
 }
@@ -488,12 +504,14 @@ function RouteController({
   navigateSaferRoute,
   navigateFasterRoute,
   fitPadding = DEFAULT_ROUTE_FIT_PADDING,
+  navigationActive = false,
 }) {
   const map = useMap();
   const fitPaddingRef = useRef(fitPadding);
   fitPaddingRef.current = fitPadding;
 
   useEffect(() => {
+    if (navigationActive) return;
     const collections = [evacuationRoute, navigateSaferRoute, navigateFasterRoute]
       .map((g) => g?.coordinates ?? g?.geometry?.coordinates ?? [])
       .filter((coords) => coords.length >= 2);
@@ -509,7 +527,71 @@ function RouteController({
       animate: true,
       duration: 1.0,
     });
-  }, [evacuationRoute, navigateSaferRoute, navigateFasterRoute, map]);
+  }, [evacuationRoute, navigateSaferRoute, navigateFasterRoute, navigationActive, map]);
+
+  return null;
+}
+
+function NavigationCameraController({
+  active = false,
+  follow = true,
+  lat,
+  lon,
+  heading = 0,
+  speedKmh = 0,
+  distanceToManeuverM = null,
+  onFollowChange,
+}) {
+  const map = useMap();
+  const programmaticRef = useRef(false);
+  const idleTimerRef = useRef(null);
+  const lastAppliedRef = useRef(null);
+
+  useEffect(() => {
+    if (!active) return undefined;
+
+    const onUserGesture = () => {
+      if (programmaticRef.current) return;
+      onFollowChange?.(false);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => onFollowChange?.(true), 10_000);
+    };
+
+    map.on('dragstart', onUserGesture);
+    map.on('zoomstart', onUserGesture);
+    return () => {
+      map.off('dragstart', onUserGesture);
+      map.off('zoomstart', onUserGesture);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [active, map, onFollowChange]);
+
+  useEffect(() => {
+    if (!follow) {
+      lastAppliedRef.current = null;
+    }
+  }, [follow]);
+
+  useEffect(() => {
+    if (!active || !follow || !Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
+
+    const zoom = zoomForSpeed(speedKmh, { maneuverWithinM: distanceToManeuverM });
+    const candidate = { lat, lon, heading, zoom };
+    if (!shouldApplyCameraUpdate(lastAppliedRef.current, candidate)) return undefined;
+
+    const center = lookAheadCenter({ lat, lon, headingDeg: heading, zoom });
+    programmaticRef.current = true;
+    lastAppliedRef.current = candidate;
+    map.setView([center.lat, center.lon], zoom, { animate: true, duration: 0.7 });
+    const timer = setTimeout(() => {
+      programmaticRef.current = false;
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [active, follow, lat, lon, heading, speedKmh, distanceToManeuverM, map]);
+
+  useEffect(() => {
+    if (!active) lastAppliedRef.current = null;
+  }, [active]);
 
   return null;
 }
@@ -536,11 +618,21 @@ export default function MapView({
   navigateFasterRoute = null,
   routeDestination = null,
   selectedNavigateRoute = 'safer',
+  destinationRadiusKm = null,
   suppressMapControls = false,
   isMobile = false,
   mapVisible = true,
   layerPreset = null,
   routeFitPadding = DEFAULT_ROUTE_FIT_PADDING,
+  navigationActive = false,
+  navigationSnap = null,
+  navigationHeading = 0,
+  navigationSpeedKmh = 0,
+  navigationDistanceAlongM = 0,
+  navigationDistanceToManeuverM = null,
+  navigationNearbyDisruption = null,
+  navigationFollow = true,
+  onNavigationFollowChange = null,
 }) {
   const isLight = theme === 'light';
   const [globalPois, setGlobalPois] = useState([]);
@@ -549,6 +641,36 @@ export default function MapView({
     () => hasActiveRoute(evacuationRoute, navigateSaferRoute, navigateFasterRoute),
     [evacuationRoute, navigateSaferRoute, navigateFasterRoute]
   );
+
+  const handleNavFollowChange = (next) => {
+    onNavigationFollowChange?.(next);
+  };
+
+  const activeNavCoords = useMemo(() => {
+    if (!navigationActive) return [];
+    const geom = selectedNavigateRoute === 'faster'
+      ? (navigateFasterRoute ?? navigateSaferRoute)
+      : (navigateSaferRoute ?? navigateFasterRoute);
+    return geom?.coordinates ?? geom?.geometry?.coordinates ?? [];
+  }, [navigationActive, selectedNavigateRoute, navigateSaferRoute, navigateFasterRoute]);
+
+  const navSplit = useMemo(() => {
+    if (!navigationActive || activeNavCoords.length < 2) return null;
+    const index = buildRouteIndex(activeNavCoords);
+    return splitRouteAtDistance(index, navigationDistanceAlongM);
+  }, [navigationActive, activeNavCoords, navigationDistanceAlongM]);
+
+  const puckPosition = useMemo(() => {
+    if (Number.isFinite(navigationSnap?.lat) && Number.isFinite(navigationSnap?.lon)) {
+      return [navigationSnap.lat, navigationSnap.lon];
+    }
+    if (userLocation) return [userLocation.lat, userLocation.lon];
+    return null;
+  }, [navigationSnap, userLocation]);
+
+  const nearbyPredId = navigationNearbyDisruption?.prediction?.id;
+  const nearbyZoneId = navigationNearbyDisruption?.prediction?.zone?.id
+    ?? navigationNearbyDisruption?.prediction?.zone?.zone_id;
 
   // Destination pin position: prefer the named destination passed from App
   // (Navigate selection or evacuation panel). Fall back to the end point of
@@ -710,7 +832,7 @@ export default function MapView({
           ];
         });
       });
-  }, [predictions]); // Refetch when predictions sweep updates (ensures sync)
+  }, []); // once per map mount — not tied to the predictions poll
  
   // Fetch ALL zone statuses (not just alerts) to show every zone on the map
   useEffect(() => {
@@ -854,6 +976,17 @@ export default function MapView({
  
   return (
     <div className="relative w-full h-full overflow-hidden">
+      {navigationActive && !navigationFollow && (
+        <button
+          type="button"
+          onClick={() => handleNavFollowChange(true)}
+          className={`absolute z-[1200] right-3 min-h-[44px] min-w-[44px] rounded-full px-4 text-sm font-bold shadow-lg pointer-events-auto ${
+            isMobile ? 'bottom-24' : 'bottom-6'
+          } ${isLight ? 'bg-white text-slate-900 border border-slate-200' : 'bg-slate-900 text-white border border-slate-700'}`}
+        >
+          Recenter
+        </button>
+      )}
       {!suppressMapControls && (
         <>
           {/* Risk Legend — on mobile, sit below the Near Me status chip (primary "am I safe?" signal) */}
@@ -1095,7 +1228,7 @@ export default function MapView({
         />
         
         {/* Render User Location Circle first so it sits at the bottom of the z-index overlay */}
-        {userLocation && (
+        {userLocation && !navigationActive && (
           <>
             <Marker 
               position={[userLocation.lat, userLocation.lon]}
@@ -1169,8 +1302,16 @@ export default function MapView({
           </>
         )}
 
+        {navigationActive && puckPosition && (
+          <Marker
+            position={puckPosition}
+            icon={createNavigationPuckIcon(navigationHeading)}
+            zIndexOffset={800}
+          />
+        )}
+
         {/* Route start pin (A) — shown only while a route is active */}
-        {activeRoutePresent && userLocation && (
+        {activeRoutePresent && userLocation && !navigationActive && (
           <Marker
             position={[userLocation.lat, userLocation.lon]}
             icon={createStartPinIcon()}
@@ -1207,6 +1348,22 @@ export default function MapView({
               </div>
             </Popup>
           </Marker>
+        )}
+
+        {/* Destination disruption-zone lookup radius — Navigate flow only */}
+        {(navigateSaferRoute || navigateFasterRoute) && !navigationActive && routePinDestination && Number.isFinite(destinationRadiusKm) && (
+          <Circle
+            center={[routePinDestination.lat, routePinDestination.lon]}
+            radius={destinationRadiusKm * 1000}
+            interactive={false}
+            pathOptions={{
+              color: '#6366f1',
+              fillColor: '#6366f1',
+              fillOpacity: 0.05,
+              weight: 1,
+              dashArray: '4, 6',
+            }}
+          />
         )}
 
         {/* Render geofenced zones */}
@@ -1271,6 +1428,18 @@ export default function MapView({
             };
           } else if (isSelected) {
             pathOptions = { ...riskStyle, weight: 5, fillOpacity: 1, opacity: 0.20, dashArray: '6, 6' };
+          }
+          const isNavNearby = navigationActive && (
+            (nearbyPredId != null && pred.id === nearbyPredId)
+            || (nearbyZoneId != null && (zone.id === nearbyZoneId || zone.zone_id === nearbyZoneId))
+          );
+          if (isNavNearby && !isOutOfRadius) {
+            pathOptions = {
+              ...pathOptions,
+              weight: Math.max(pathOptions.weight || 3, 6),
+              opacity: 1,
+              fillOpacity: Math.max(pathOptions.fillOpacity || 0.1, 0.22),
+            };
           }
  
           return (
@@ -1764,10 +1933,26 @@ export default function MapView({
           navigateSaferRoute={navigateSaferRoute}
           navigateFasterRoute={navigateFasterRoute}
           fitPadding={routeFitPadding}
+          navigationActive={navigationActive}
+        />
+
+        <NavigationCameraController
+          active={navigationActive}
+          follow={navigationFollow}
+          lat={puckPosition?.[0]}
+          lon={puckPosition?.[1]}
+          heading={navigationHeading}
+          speedKmh={navigationSpeedKmh}
+          distanceToManeuverM={navigationDistanceToManeuverM}
+          onFollowChange={handleNavFollowChange}
         />
 
         {/* Fix Leaflet container size on mobile */}
-        <MapSizeInvalidator selectedEarthquake={selectedEarthquake} isMobile={isMobile} />
+        <MapSizeInvalidator
+          selectedEarthquake={selectedEarthquake}
+          isMobile={isMobile}
+          navigationActive={navigationActive}
+        />
 
         {/* Listen for selected zone changes and reposition camera */}
         <MapController
@@ -1776,12 +1961,13 @@ export default function MapView({
           mapVisible={mapVisible}
           isMobile={isMobile}
           earthquakeFitPadding={routeFitPadding}
-          disableZoneAutoZoom={activeRoutePresent}
+          disableZoneAutoZoom={activeRoutePresent || navigationActive}
+          navigationActive={navigationActive}
         />
         <UserLocationController
           userLocation={userLocation}
           nearMeRadius={nearMeRadius}
-          enabled={!evacuationRoute && nearMeFilterActive}
+          enabled={!evacuationRoute && nearMeFilterActive && !navigationActive}
           selectedEarthquake={selectedEarthquake}
         />
  
@@ -1838,13 +2024,31 @@ export default function MapView({
           const coords = navigateFasterRoute.coordinates ?? [];
           if (coords.length < 2) return null;
           const selected = selectedNavigateRoute === 'faster';
+          if (navigationActive && selected && navSplit) {
+            return (
+              <>
+                {navSplit.traveled.length >= 2 && (
+                  <Polyline
+                    positions={navSplit.traveled.map(([lon, lat]) => [lat, lon])}
+                    pathOptions={{ color: '#94a3b8', weight: 5, opacity: 0.45, lineCap: 'round' }}
+                  />
+                )}
+                {navSplit.remaining.length >= 2 && (
+                  <Polyline
+                    positions={navSplit.remaining.map(([lon, lat]) => [lat, lon])}
+                    pathOptions={{ color: '#f97316', weight: 7, opacity: 0.98, lineCap: 'round' }}
+                  />
+                )}
+              </>
+            );
+          }
           return (
             <Polyline
               positions={coords.map(([lon, lat]) => [lat, lon])}
               pathOptions={{
                 color: '#f97316',
                 weight: selected ? 6 : 4,
-                opacity: selected ? 0.95 : 0.45,
+                opacity: navigationActive ? 0.22 : (selected ? 0.95 : 0.45),
                 lineCap: 'round',
               }}
             />
@@ -1854,13 +2058,31 @@ export default function MapView({
           const coords = navigateSaferRoute.coordinates ?? [];
           if (coords.length < 2) return null;
           const selected = selectedNavigateRoute === 'safer';
+          if (navigationActive && selected && navSplit) {
+            return (
+              <>
+                {navSplit.traveled.length >= 2 && (
+                  <Polyline
+                    positions={navSplit.traveled.map(([lon, lat]) => [lat, lon])}
+                    pathOptions={{ color: '#94a3b8', weight: 5, opacity: 0.45, lineCap: 'round' }}
+                  />
+                )}
+                {navSplit.remaining.length >= 2 && (
+                  <Polyline
+                    positions={navSplit.remaining.map(([lon, lat]) => [lat, lon])}
+                    pathOptions={{ color: '#22c55e', weight: 7, opacity: 0.98, dashArray: '10, 6', lineCap: 'round' }}
+                  />
+                )}
+              </>
+            );
+          }
           return (
             <Polyline
               positions={coords.map(([lon, lat]) => [lat, lon])}
               pathOptions={{
                 color: '#22c55e',
                 weight: selected ? 6 : 4,
-                opacity: selected ? 0.95 : 0.5,
+                opacity: navigationActive ? 0.22 : (selected ? 0.95 : 0.5),
                 dashArray: '10, 6',
                 lineCap: 'round',
               }}

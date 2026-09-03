@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigation, Search, Locate, Loader2, MapPin } from 'lucide-react';
 import CrowdMeter from './CrowdMeter';
+import DestinationRadiusSlider from './DestinationRadiusSlider';
 import { resolveCrowdScore } from '../utils/crowdLookup';
 import { getApiUrl } from '../utils/getApiUrl';
 import { calculateDistanceKm } from '../utils/haversine';
@@ -52,6 +53,8 @@ export default function NavigatePanel({
   theme = 'light',
   onRoutesReady,
   onClose,
+  destinationRadiusKm,
+  onDestinationRadiusChange,
 }) {
   const isLight = theme === 'light';
   const [query, setQuery] = useState('');
@@ -323,8 +326,49 @@ export default function NavigatePanel({
       <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
         We will show a safer route that tries to skip disruption zones, and a faster route that may go through them.
       </p>
+
+      {Number.isFinite(destinationRadiusKm) && onDestinationRadiusChange && (
+        <div className={`rounded-xl border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-slate-800 bg-slate-900/50'}`}>
+          <DestinationRadiusSlider
+            radiusKm={destinationRadiusKm}
+            onChange={onDestinationRadiusChange}
+            theme={theme}
+          />
+        </div>
+      )}
     </div>
   );
+}
+
+const NEARBY_TYPE_LABEL = {
+  traffic: 'Traffic',
+  weather: 'Weather',
+  flood: 'Flood',
+  waterway: 'Flood',
+  crowd: 'Crowd',
+  earthquake: 'Earthquake',
+};
+
+function nearbyTypeLabel(disruptionType) {
+  const key = String(disruptionType || '').toLowerCase();
+  return NEARBY_TYPE_LABEL[key] || (disruptionType || 'Alert');
+}
+
+function nearbyRiskColor(risk, isLight) {
+  switch (risk) {
+    case 'Critical':
+      return 'text-red-500 border-red-500/20 bg-red-500/5';
+    case 'High':
+      return 'text-orange-500 border-orange-500/20 bg-orange-500/5';
+    case 'Medium':
+      return isLight
+        ? 'text-yellow-700 border-yellow-600/30 bg-yellow-500/10'
+        : 'text-yellow-300 border-yellow-500/20 bg-yellow-500/5';
+    default:
+      return isLight
+        ? 'text-emerald-600 border-emerald-500/20 bg-emerald-500/5'
+        : 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5';
+  }
 }
 
 export function NavigateRouteBar({
@@ -335,29 +379,54 @@ export function NavigateRouteBar({
   onSelect,
   onClear,
   theme = 'light',
+  nearbyPredictions = [],
+  radiusKm,
+  selectedPrediction,
+  onSelectPrediction,
+  onStartNavigation,
+  zonesDefaultExpanded = true,
 }) {
   const isLight = theme === 'light';
+  const [zonesExpanded, setZonesExpanded] = useState(zonesDefaultExpanded && nearbyPredictions.length > 0);
+
+  useEffect(() => {
+    setZonesExpanded(zonesDefaultExpanded && nearbyPredictions.length > 0);
+  }, [destination, nearbyPredictions.length, zonesDefaultExpanded]);
+
   if (!safer && !faster) return null;
   const destName = destination?.name || 'Destination';
+
+  const ROUTE_STYLES = {
+    safer: {
+      active: 'bg-emerald-600 text-white',
+      idleBorder: isLight ? 'border-l-4 border-l-emerald-400/60' : 'border-l-4 border-l-emerald-500/50',
+      mutedText: 'text-emerald-100',
+    },
+    faster: {
+      active: 'bg-orange-500 text-white',
+      idleBorder: isLight ? 'border-l-4 border-l-orange-400/60' : 'border-l-4 border-l-orange-500/50',
+      mutedText: 'text-orange-100',
+    },
+  };
+
   const btn = (key, label, route) => {
     if (!route) return null;
     const active = selected === key;
+    const style = ROUTE_STYLES[key];
     return (
       <button
         type="button"
         onClick={() => onSelect(key)}
         className={`flex-1 min-h-[44px] rounded-lg px-2 py-2 text-left ${
           active
-            ? 'bg-indigo-600 text-white'
-            : isLight
-              ? 'bg-slate-100 text-slate-800'
-              : 'bg-slate-800 text-slate-200'
+            ? style.active
+            : `${style.idleBorder} ${isLight ? 'bg-slate-100 text-slate-800' : 'bg-slate-800 text-slate-200'}`
         }`}
       >
         <div className="text-[10px] font-bold uppercase tracking-wide">{label}</div>
         <div className="text-xs font-semibold">{route.durationMin} min · {route.distanceKm} km</div>
         {route.viaLabel && (
-          <div className={`mt-0.5 text-[10px] leading-snug ${active ? 'text-indigo-100' : isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+          <div className={`mt-0.5 text-[10px] leading-snug ${active ? style.mutedText : isLight ? 'text-slate-500' : 'text-slate-400'}`}>
             {route.viaLabel}
           </div>
         )}
@@ -384,6 +453,90 @@ export function NavigateRouteBar({
         {btn('safer', 'Safer', safer)}
         {btn('faster', 'Faster', faster)}
       </div>
+
+      {Number.isFinite(radiusKm) && (
+        <div className={`mt-3 pt-3 border-t ${isLight ? 'border-slate-200' : 'border-slate-800'}`}>
+          <button
+            type="button"
+            onClick={() => setZonesExpanded((v) => !v)}
+            className="w-full flex items-center justify-between gap-2"
+          >
+            <span className="flex items-center gap-1.5 text-xs font-semibold">
+              <span className={`transition-transform ${zonesExpanded ? 'rotate-90' : ''}`}>›</span>
+              Disruption zones near destination
+              {nearbyPredictions.length > 0 && (
+                <span className={`inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full text-[10px] font-bold ${
+                  isLight ? 'bg-indigo-100 text-indigo-700' : 'bg-indigo-500/20 text-indigo-300'
+                }`}>
+                  {nearbyPredictions.length}
+                </span>
+              )}
+            </span>
+            <span className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>Within {radiusKm} km</span>
+          </button>
+
+          {zonesExpanded && (
+            <div className="mt-2 max-h-40 overflow-y-auto space-y-2 pr-0.5">
+              {nearbyPredictions.length === 0 ? (
+                <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                  No disruption zones within {radiusKm} km of this destination.
+                </p>
+              ) : (
+                nearbyPredictions.map((pred) => {
+                  const zoneName = pred.zone?.name ?? 'Unknown area';
+                  const risk = pred.risk_level || pred.severity || 'Medium';
+                  const predId = pred.id ?? pred.alert_id;
+                  const selectedId = selectedPrediction?.id ?? selectedPrediction?.alert_id;
+                  const isSelected = predId != null && predId === selectedId;
+                  return (
+                    <div
+                      key={predId ?? `${zoneName}-${pred.distanceKm}`}
+                      className={`rounded-lg border px-2.5 py-2 text-xs ${
+                        isSelected
+                          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10'
+                          : isLight
+                            ? 'border-slate-200 bg-white'
+                            : 'border-slate-800 bg-slate-900/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold truncate">{zoneName}</p>
+                        <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-bold ${nearbyRiskColor(risk, isLight)}`}>
+                          {risk}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>
+                          {nearbyTypeLabel(pred.disruption_type)} · {pred.distanceKm.toFixed(1)} km from destination
+                        </span>
+                        {onSelectPrediction && (
+                          <button
+                            type="button"
+                            onClick={() => onSelectPrediction(pred)}
+                            className="shrink-0 text-[10px] font-bold text-indigo-500 hover:text-indigo-400"
+                          >
+                            View
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {onStartNavigation && (
+        <button
+          type="button"
+          onClick={() => onStartNavigation(selected)}
+          className="mt-3 w-full min-h-[48px] rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-extrabold tracking-wide"
+        >
+          Start Driving
+        </button>
+      )}
     </div>
   );
 }

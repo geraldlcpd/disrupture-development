@@ -19,10 +19,10 @@ AND inference — replacing all of it with one indexed row lookup.
 import json
 from datetime import datetime, timezone
 
-# 5 minutes — matches the client-side cache bump, and the worker's ~15-minute
-# ingestion cycle means underlying signals don't meaningfully change faster
-# than this anyway, so a short server-side cache costs negligible freshness.
-CACHE_TTL_SECONDS = 300
+# 15 minutes — matches the worker's ~15-minute ingestion/scoring cycle so a
+# successful local batch keeps Vercel on the cache-only fast path until the
+# next worker refresh.
+CACHE_TTL_SECONDS = 900
 
 
 def get_cached(cur, cache_key: str):

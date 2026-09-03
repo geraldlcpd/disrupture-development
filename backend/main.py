@@ -19,7 +19,7 @@ import secrets
 import math
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any
 
 from fastapi import FastAPI, Depends, HTTPException, Query
@@ -89,6 +89,27 @@ rivers_cache = TTLCache(ttl_seconds=300)
 timelines_cache = TTLCache(ttl_seconds=120)
 stats_cache = TTLCache(ttl_seconds=600)
 zone_status_cache = TTLCache(ttl_seconds=90)
+
+# ML prediction cache TTL — must match frontend/api/_cache_helpers.py and worker/ml_scoring.py
+ML_CACHE_TTL_SECONDS = 900
+
+
+def _parse_ml_cache_row(row) -> dict | None:
+    """Return cached ML JSON if present and within TTL, else None."""
+    if not row:
+        return None
+    computed_at = row["computed_at"]
+    if computed_at.tzinfo is None:
+        computed_at = computed_at.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - computed_at).total_seconds()
+    if age_seconds > ML_CACHE_TTL_SECONDS:
+        return None
+    try:
+        result = json.loads(row["result_json"])
+    except (TypeError, ValueError):
+        return None
+    result["_cache_hit"] = True
+    return result
 
 
 # ── Geometry Helper ──────────────────────────────────────────────────────────
@@ -584,6 +605,45 @@ async def get_all_zone_statuses(db: AsyncSession = Depends(get_db)):
         }
         for s in statuses
     ]
+
+
+# ── ML Predictions (cache-read; computed by local worker) ─────────────────────
+@app.get("/predict/zone/{zone_id}")
+async def get_ml_zone_prediction(zone_id: int, db: AsyncSession = Depends(get_db)):
+    """Serve precomputed zone risk from ml_prediction_cache (worker batch scoring)."""
+    result = await db.execute(
+        text(
+            "SELECT result_json, computed_at FROM ml_prediction_cache WHERE cache_key = :key"
+        ),
+        {"key": f"zone:{zone_id}"},
+    )
+    row = result.mappings().first()
+    cached = _parse_ml_cache_row(row)
+    if cached is not None:
+        return cached
+    raise HTTPException(
+        status_code=503,
+        detail="ML prediction not available yet. Run the local worker scoring cycle.",
+    )
+
+
+@app.get("/predict/resolution/{alert_id}")
+async def get_ml_resolution_prediction(alert_id: int, db: AsyncSession = Depends(get_db)):
+    """Serve precomputed resolution ETA from ml_prediction_cache (worker batch scoring)."""
+    result = await db.execute(
+        text(
+            "SELECT result_json, computed_at FROM ml_prediction_cache WHERE cache_key = :key"
+        ),
+        {"key": f"resolution:{alert_id}"},
+    )
+    row = result.mappings().first()
+    cached = _parse_ml_cache_row(row)
+    if cached is not None:
+        return cached
+    raise HTTPException(
+        status_code=503,
+        detail="ML resolution prediction not available yet. Run the local worker scoring cycle.",
+    )
 
 
 # ── Predictions Timeline ─────────────────────────────────────────────────────
