@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRe
 import { usePredictions } from './hooks/usePredictions';
 import { useLiveLocation } from './hooks/useLiveLocation';
 import { useNavigationSession } from './hooks/useNavigationSession';
+import { useVisibilityAwareInterval } from './hooks/useVisibilityAwareInterval';
 import Sidebar from './components/Sidebar';
 import BottomSheet from './components/BottomSheet';
 import EvacuationPanel from './components/EvacuationPanel';
@@ -148,6 +149,7 @@ export default function App() {
   const [driving, setDriving] = useState(false);
   const { predictions, loading, error, isFallback, refresh } = usePredictions({
     intervalMs: driving ? 20000 : 30000,
+    pauseWhenHidden: !driving,
   });
 
   const handleRouteReady = (geoJSON, destination) => {
@@ -502,7 +504,7 @@ export default function App() {
   // Earthquake states
   const [earthquakes, setEarthquakes] = useState([]);
   const [selectedEarthquake, setSelectedEarthquake] = useState(null);
-  const fetchEarthquakes = async () => {
+  const fetchEarthquakes = useCallback(async () => {
     try {
       const response = await fetch(`${API_URL}/earthquakes`);
       if (response.ok) {
@@ -512,13 +514,9 @@ export default function App() {
     } catch (err) {
       console.warn("[API] Could not retrieve earthquakes telemetry.", err);
     }
-  };
+  }, [API_URL]);
 
-  useEffect(() => {
-    fetchEarthquakes();
-    const interval = setInterval(fetchEarthquakes, 120000);
-    return () => clearInterval(interval);
-  }, []);
+  useVisibilityAwareInterval(fetchEarthquakes, 120000);
 
   const handlePollTelemetry = () => {
     refresh();
@@ -534,17 +532,14 @@ export default function App() {
   }, [mobileTab, isMobile]);
 
   // Fetch all zone statuses — used by Sidebar LOW tier
-  useEffect(() => {
-    const fetchAllZones = async () => {
-      try {
-        const res = await fetch(`${API_URL}/zone-status/all`);
-        if (res.ok) setAllZones(await res.json());
-      } catch (e) { console.warn('[App] allZones fetch failed:', e); }
-    };
-    fetchAllZones();
-    const id = setInterval(fetchAllZones, 60000);
-    return () => clearInterval(id);
+  const fetchAllZones = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/zone-status/all`);
+      if (res.ok) setAllZones(await res.json());
+    } catch (e) { console.warn('[App] allZones fetch failed:', e); }
   }, [API_URL]);
+
+  useVisibilityAwareInterval(fetchAllZones, 60000);
 
 
   const locateUser = () => {
@@ -674,26 +669,25 @@ export default function App() {
   }, []);
 
   // Poll system diagnostics — faster while the stack splash is visible
-  useEffect(() => {
-    const checkDiagnostics = async () => {
-      try {
-        const res = await fetch(`${API_URL}/admin/status`);
-        if (res.ok) {
-          const data = await res.json();
-          setDbStatus(data.database?.status ?? 'connecting');
-          setDbLatency(data.database?.latency_ms ?? 0);
-          setZonesLoaded(Number(data.cache?.zones_loaded ?? 0));
-        } else {
-          setDbStatus('unreachable');
-        }
-      } catch {
+  const checkDiagnostics = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/admin/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setDbStatus(data.database?.status ?? 'connecting');
+        setDbLatency(data.database?.latency_ms ?? 0);
+        setZonesLoaded(Number(data.cache?.zones_loaded ?? 0));
+      } else {
         setDbStatus('unreachable');
       }
-    };
-    checkDiagnostics();
-    const interval = setInterval(checkDiagnostics, showStackSplash ? 2000 : 10000);
-    return () => clearInterval(interval);
-  }, [API_URL, showStackSplash]);
+    } catch {
+      setDbStatus('unreachable');
+    }
+  }, [API_URL]);
+
+  useVisibilityAwareInterval(checkDiagnostics, showStackSplash ? 2000 : 10000, {
+    pauseWhenHidden: !showStackSplash,
+  });
 
   // Track if actual db predictions are seeded
   useEffect(() => {

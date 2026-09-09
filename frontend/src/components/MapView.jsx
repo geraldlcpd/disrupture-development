@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval';
 import { ResolutionBadgeCompact } from './ResolutionBadge';
 import { MapContainer, TileLayer, Tooltip, useMap, useMapEvents, Marker, Popup, Polyline, Circle } from 'react-leaflet';
 import L from 'leaflet';
@@ -835,22 +836,19 @@ export default function MapView({
   }, []); // once per map mount — not tied to the predictions poll
  
   // Fetch ALL zone statuses (not just alerts) to show every zone on the map
-  useEffect(() => {
-    const fetchAllZones = async () => {
-      try {
-        const res = await fetch(`${getApiUrl()}/zone-status/all`);
-        if (res.ok) {
-          const data = await res.json();
-          setAllZones(data);
-        }
-      } catch (e) {
-        console.warn('[MapView] Could not fetch zone statuses:', e);
+  const fetchAllZones = useCallback(async () => {
+    try {
+      const res = await fetch(`${getApiUrl()}/zone-status/all`);
+      if (res.ok) {
+        const data = await res.json();
+        setAllZones(data);
       }
-    };
-    fetchAllZones();
-    const id = setInterval(fetchAllZones, 30000);
-    return () => clearInterval(id);
+    } catch (e) {
+      console.warn('[MapView] Could not fetch zone statuses:', e);
+    }
   }, []);
+
+  useVisibilityAwareInterval(fetchAllZones, 30000);
  
   const toggleLayer = (layerId) => {
     setActiveLayers(prev => ({ ...prev, [layerId]: !prev[layerId] }));

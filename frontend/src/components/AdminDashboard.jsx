@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { usePageVisible } from '../hooks/usePageVisible';
+import { useVisibilityAwareInterval } from '../hooks/useVisibilityAwareInterval';
 import {
   Database, Network, RefreshCw, LogOut, Lock, CheckCircle,
   AlertTriangle, ShieldAlert, Cpu, Clock, Activity, Table2, HardDrive,
@@ -1166,26 +1168,32 @@ export default function AdminDashboard({ onBack, theme = 'light' }) {
     }
   }, []);
 
-  // 5. On authentication: fetch status + db-stats (once)
-  useEffect(() => {
-    if (!isAuthenticated) return;
+  const pageVisible = usePageVisible();
 
+  const pollAdminMetrics = useCallback(() => {
     fetchStatusMetrics();
-    fetchDbStats(); // one-shot only
+    fetchSlaMetrics(slaRange);
+    setTimeLeft(180);
+  }, [fetchStatusMetrics, fetchSlaMetrics, slaRange]);
 
-    const timerInterval = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          fetchStatusMetrics(); // only status polls, NOT db-stats
-          fetchSlaMetrics(slaRange);
-          return 180;
-        }
-        return prev - 1;
-      });
+  // 5. On authentication: one-shot db-stats; status/SLA poll every 180s (pauses when tab hidden)
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    fetchDbStats();
+    return undefined;
+  }, [isAuthenticated, fetchDbStats]);
+
+  useVisibilityAwareInterval(pollAdminMetrics, 180000, { enabled: isAuthenticated });
+
+  useEffect(() => {
+    if (!isAuthenticated || !pageVisible) return undefined;
+
+    const countdownId = setInterval(() => {
+      setTimeLeft((prev) => Math.max(0, prev - 1));
     }, 1000);
 
-    return () => clearInterval(timerInterval);
-  }, [isAuthenticated, fetchStatusMetrics, fetchDbStats, fetchSlaMetrics, slaRange]);
+    return () => clearInterval(countdownId);
+  }, [isAuthenticated, pageVisible]);
 
   // 6. Fetch SLA metrics when authenticated or range changes
   useEffect(() => {

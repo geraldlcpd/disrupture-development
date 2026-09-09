@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { getApiUrl } from '../utils/getApiUrl';
+import { useVisibilityAwareInterval } from './useVisibilityAwareInterval';
 
 const API_URL = getApiUrl();
 
-export function usePredictions({ intervalMs = 30000 } = {}) {
+export function usePredictions({ intervalMs = 30000, pauseWhenHidden = true } = {}) {
   const [predictions, setPredictions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -49,11 +50,7 @@ export function usePredictions({ intervalMs = 30000 } = {}) {
     }
   }, []);
 
-  useEffect(() => {
-    fetchActivePredictions();
-    const intervalId = setInterval(fetchActivePredictions, intervalMs);
-    return () => clearInterval(intervalId);
-  }, [fetchActivePredictions, intervalMs]);
+  useVisibilityAwareInterval(fetchActivePredictions, intervalMs, { pauseWhenHidden });
 
   return { predictions, loading, error, isFallback, refresh: fetchActivePredictions };
 }

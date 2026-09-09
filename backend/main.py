@@ -351,6 +351,10 @@ async def get_recent_earthquakes(db: AsyncSession = Depends(get_db)):
 
 
 # ── Rivers / Waterways ───────────────────────────────────────────────────────
+def _waterway_display_name(w) -> str:
+    return (w.name or "").strip() or f"Waterway {w.hyriv_id}"
+
+
 async def _fetch_rivers(db: AsyncSession, force: bool = False):
     if not force:
         cached = await rivers_cache.get("global_rivers")
@@ -374,7 +378,7 @@ async def _fetch_rivers(db: AsyncSession, force: bool = False):
             "last_updated": w.last_updated,
 
             # ===== Frontend compatibility =====
-            "name": f"Waterway {w.hyriv_id}",
+            "name": _waterway_display_name(w),
             "category": "river",
 
             "current_level":

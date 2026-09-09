@@ -134,6 +134,7 @@ class JabodetabekWaterway(Base):
     __tablename__ = "jabodetabek_waterways"
 
     hyriv_id = Column(BigInteger, primary_key=True)
+    name = Column(String(100), nullable=True)
     next_down = Column(BigInteger)
     main_riv = Column(BigInteger)
     length_km = Column(Float)
