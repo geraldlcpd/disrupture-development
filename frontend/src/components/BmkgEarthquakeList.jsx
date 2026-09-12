@@ -94,7 +94,7 @@ export default function BmkgEarthquakeList({
                   isLight ? 'border-slate-200' : 'border-slate-800/20'
                 }`}>
                   <span className={`text-[10px] font-medium min-w-0 truncate ${isLight ? 'text-slate-600' : 'text-slate-500'}`}>
-                    {formatEarthquakeWhenEn(eq.datetime)}
+                    {formatEarthquakeWhenEn(eq.datetime, { eventId: eq.event_id })}
                     <span className="mx-1">·</span>
                     Depth: {eq.depth}
                   </span>

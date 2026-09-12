@@ -1,26 +1,49 @@
+const NAIVE_AS_UTC = import.meta.env.VITE_EARTHQUAKE_NAIVE_AS_UTC === 'true';
+
+/**
+ * Parse earthquake timestamps from API payloads.
+ * Timezone-less strings are ambiguous: USGS/mock store UTC-naive, real BMKG stores WIB-naive.
+ */
+export function parseEarthquakeInstant(value, eventId = '') {
+  if (!value) return null;
+  const s = String(value).trim();
+  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(s)) {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+  const id = String(eventId || '');
+
+  if (NAIVE_AS_UTC || id.startsWith('USGS-')) {
+    const d = new Date(`${normalized}Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const d = new Date(`${normalized}+07:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * Format earthquake event timestamps for display (WIB).
  * Returns a readable fallback when the value is missing or invalid.
  */
-export function formatEarthquakeWhen(value) {
-  if (!value) return 'Time unavailable';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return 'Time unavailable';
+export function formatEarthquakeWhen(value, { eventId } = {}) {
+  const d = parseEarthquakeInstant(value, eventId);
+  if (!d) return 'Time unavailable';
   return d.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 }
 
 /** English timestamp for BMKG cards (Jakarta time). */
-export function formatEarthquakeWhenEn(value) {
-  if (!value) return 'Time unavailable';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return 'Time unavailable';
+export function formatEarthquakeWhenEn(value, { eventId } = {}) {
+  const d = parseEarthquakeInstant(value, eventId);
+  if (!d) return 'Time unavailable';
   return d.toLocaleString('en-US', {
     timeZone: 'Asia/Jakarta',
     dateStyle: 'short',
     timeStyle: 'medium',
   });
 }
-
 /**
  * Classify BMKG Potensi text into tsunami risk levels.
  * @returns {'none' | 'watch' | 'high' | 'unknown'}

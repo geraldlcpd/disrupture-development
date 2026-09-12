@@ -1676,7 +1676,7 @@ export default function MapView({
                     </div>
                     <div className="flex justify-between border-t border-slate-200 dark:border-slate-800 pt-1 mt-1 text-[10px] text-slate-400">
                       <span>Occurred:</span>
-                      <span>{formatEarthquakeWhen(eq.datetime)}</span>
+                      <span>{formatEarthquakeWhen(eq.datetime, { eventId: eq.event_id })}</span>
                     </div>
                   </div>
                 </div>
