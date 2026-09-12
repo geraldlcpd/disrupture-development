@@ -48,6 +48,7 @@ import { saveUserLocation } from './utils/idbLocation';
 import { saveNotificationPreferences } from './utils/idbPreferences';
 import { getGeolocationErrorMessage } from './utils/geolocationMessage';
 import { createGpsSimulator } from './utils/gpsSimulator.js';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 
 const MapView = lazy(() => import('./components/MapView'));
 const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY || '';
@@ -2842,6 +2843,8 @@ export default function App() {
           theme={theme}
         />
       )}
+
+      <SpeedInsights />
     </div>
   );
 }
